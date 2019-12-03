@@ -1,17 +1,10 @@
 from __future__ import print_function
 import cv2
 import numpy as np
-from time import sleep
 import cv2
 import torch
-import torchvision
-import torchvision.transforms as transforms
-from keras.preprocessing.image import img_to_array
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import dlib
-import face_recognition
 import pkg_resources
 
 haar_xml = pkg_resources.resource_filename(
@@ -68,19 +61,29 @@ def face_detector(img):
         return (x, w, y, h), np.zeros((48, 48), np.uint8), img
     return (x, w, y, h), roi_gray, img
 
-
-cap = cv2.VideoCapture(0)
+ip = '172.18.200.55'
+cap = cv2.VideoCapture('rtsp://admin:Supervisor@{}/onvif/device_service'.format(ip))
 
 while True:
 
     ret, frame = cap.read()
-    rect, face, image = face_detector(frame)
+    try:
+        rect, face, image = face_detector(frame)
+    except:
+        cap = cv2.VideoCapture('rtsp://admin:Supervisor@{}/onvif/device_service'.format(ip))
+        continue
+
     if np.sum([face]) != 0.0:
         roi = 2*(face.astype("float") / 255.0) - 1
-        roi = img_to_array(roi)
+        roi = np.array(roi)
+        roi = np.rollaxis(roi, 1, 0)
+        roi = np.expand_dims(roi, axis=2)
+        # roi = np.transpose(roi, (2, 0, 1))
+        # roi = img_to_array(roi)
         roi = np.expand_dims(roi, axis=0)
         roi = np.expand_dims(roi, axis=0)
         roi = torch.from_numpy(roi)
+        roi = roi.float()
         roi = roi.squeeze(dim=4)
         # make a prediction on the ROI, then lookup the class
         preds = net(roi.to(device))[0]
@@ -91,6 +94,7 @@ while True:
         cv2.putText(image, "No Face Found", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 3)
 
     cv2.imshow('All', image)
+
     if cv2.waitKey(1) == 13:  # 13 is the Enter Key
         break
 
