@@ -14,27 +14,78 @@ import torch.nn.functional as F
 import numpy as np
 import cv2
 import torch
-# import gspreed as gs
+import gspread as gs
+from oauth2client.service_account import ServiceAccountCredentials
 
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+class API:
+
+    def __init__(self):
+        self.scope = ['https://spreadsheets.google.com/feeds',
+                      'https://www.googleapis.com/auth/drive']
+
+        self.credentials = ServiceAccountCredentials.from_json_keyfile_name('Emotions Project-481579272f6a.json',
+                                                                            self. scope)
+        self.client = gs.authorize(self.credentials)
+
+    def write_data(self, sheetname, vector, timestamp):
+        try:
+            sheet = self.client.open(sheetname)
+        except gs.exceptions.SpreadsheetNotFound:
+            sheet = self.client.create(sheetname)
+            sheet.share('iasizykh@miem.hse.ru', perm_type='user', role='writer')
+
+        row = 1
+        column = 1
+        sheet = sheet.sheet1
+        value = sheet.cell(row, column).value
+        if value != "":
+            while value != "":
+                row += 1
+                value = sheet.cell(row, column).value
+
+        if value == "":
+            sheet.update_cell(row, column, timestamp)
+            for em in vector:
+                column += 1
+                sheet.update_cell(row, column, str(em))
+            row += 1
+            column = 1
+
+        return row, column
+
+    def write_data(self, sheetname, vector, timestamp, last_row, last_column):
+        try:
+            sheet = self.client.open(sheetname)
+        except gs.exceptions.SpreadsheetNotFound:
+            sheet = self.client.create(sheetname)
+            sheet.share('iasizykh@miem.hse.ru', perm_type='user', role='writer')
+        sheet = sheet.sheet1
+        sheet.update_cell(last_row, last_column, timestamp)
+        for em in vector:
+            last_column += 1
+            sheet.update_cell(last_row, last_column, str(em))
+        last_row += 1
+        last_column = 1
+        return last_row, last_column
 
 
 class Classifier(nn.Module):
 
     def __init__(self):
         super(Classifier, self).__init__()
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.conv1 = nn.Conv2d(1, 6, 5).to(device)  # # # TODO<<"^~^">>TODO
-        self.pool = nn.MaxPool2d(2, 2).to(device)
-        self.conv2 = nn.Conv2d(6, 24, 5).to(device)
-        self.fc1 = nn.Linear(24 * 9 * 9, 486).to(device)
-        self.fc2 = nn.Linear(486, 84).to(device)
+        # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO<<"^~^">>TODO
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 24, 5)
+        self.fc1 = nn.Linear(24 * 9 * 9, 486)
+        self.fc2 = nn.Linear(486, 84)
         # self.fc3 = nn.Linear(120, 84).to(device)
-        self.fc3 = nn.Linear(84, 7).to(device)
+        self.fc3 = nn.Linear(84, 7)
 
     def forward(self, x):
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        x = self.pool(F.relu(self.conv1(x))).to(device)
+        x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = x.view(-1, 24 * 9 * 9)
         x = F.relu(self.fc1(x))
@@ -47,15 +98,15 @@ class Classifier(nn.Module):
 class Emanalisis():
 
     # from classifier by Sizykh Ivan
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     class_labels = ['ANGRY', 'DISGUST', 'FEAR', 'HAPPY', 'SAD', 'SURPRISE', 'NEUTRAL']
     PATH = "./check_points_4/net_714.pth"
-    classifier = Classifier()
+    classifier = Classifier().to(device)
     classifier.load_state_dict(torch.load(PATH))
 
     # from detector by Belyakova Katerina
     parser = argparse.ArgumentParser(description='Retinaface')
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     parser.add_argument('-m', '--trained_model', default='./weights/Resnet50_Final.pth',
                         type=str, help='Trained state_dict file path to open')
@@ -148,9 +199,7 @@ class Emanalisis():
     # ip = '172.18.191.137'
     uri = 'rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'
 
-    def run(self, ip, fps):
-
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    def prerun(self):
         torch.set_grad_enabled(False)
         cfg = None
         if self.args.network == "mobile0.25":
@@ -164,9 +213,22 @@ class Emanalisis():
         print('Finished loading model!')
         print(detector)
         cudnn.benchmark = True
-        detector = detector.to(device)
+        self.detector = detector.to(self.device)
+        self.cfg = cfg
 
-        cap = cv2.VideoCapture('rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'.format(ip))
+    detector = None
+    cfg = None
+
+    def run(self, ip, fps):
+
+        last_row = 1
+        last_column = 1
+
+        # to load RetinaFace model
+        if self.detector is None or self.cfg is None:
+            self.prerun()
+
+        cap = cv2.VideoCapture(0)#self.uri.format(ip))
         i = 0
         while True:
 
@@ -184,18 +246,18 @@ class Emanalisis():
                     scale = scale.to(self.device)
 
                     tic = time.time()
-                    loc, conf, landms = detector(img)  # forward pass
+                    loc, conf, landms = self.detector(img)  # forward pass
                     print('net forward time: {:.4f}'.format(time.time() - tic))
 
-                    priorbox = PriorBox(cfg, image_size=(im_height, im_width))
+                    priorbox = PriorBox(self.cfg, image_size=(im_height, im_width))
                     priors = priorbox.forward()
                     priors = priors.to(self.device)
                     prior_data = priors.data
-                    boxes = decode(loc.data.squeeze(0), prior_data, cfg['variance'])
+                    boxes = decode(loc.data.squeeze(0), prior_data, self.cfg['variance'])
                     boxes = boxes * scale / self.resize
                     boxes = boxes.cpu().numpy()
                     scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
-                    landms = decode_landm(landms.data.squeeze(0), prior_data, cfg['variance'])
+                    landms = decode_landm(landms.data.squeeze(0), prior_data, self.cfg['variance'])
                     scale1 = torch.Tensor([img.shape[3], img.shape[2], img.shape[3], img.shape[2],
                                            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
                                            img.shape[3], img.shape[2]])
@@ -259,6 +321,12 @@ class Emanalisis():
                             label = self.class_labels[preds.argmax()]
                             ###########
 
+                            # reference to API TODO parallelize API and main part
+                            api = API()
+                            last_row, last_column = api.write_data('test1', preds.tolist(), 0, last_row, last_column)
+
+                            ######
+
                             # os.chdir(r"D:/Projects/Vishka/3term/emotionsproject/emotions/crop")
                             # cv2.imwrite("crop_face " + str(count_crop) + ".jpg", gray_res)
                             cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
@@ -271,11 +339,11 @@ class Emanalisis():
 
                             # dots on facial features
 
-                            cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
-                            cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
-                            cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
-                            cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
-                            cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
+                            # cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
+                            # cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
+                            # cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
+                            # cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
+                            # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
 
 
                     cv2.imshow('Face Detector', img_raw)
@@ -285,7 +353,7 @@ class Emanalisis():
                 #         cv2.imwrite("detect_frame " + str(i) + ".jpg", img_raw)
 
             except:
-                cap = cv2.VideoCapture('rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'.format(ip))
+                cap = cv2.VideoCapture(self.uri.format(ip))
                 continue
 
             if cv2.waitKey(1) == 13:
