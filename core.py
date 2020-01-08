@@ -8,7 +8,6 @@ from utils.nms.py_cpu_nms import py_cpu_nms
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
 import time
-from nms import nms
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -16,25 +15,38 @@ import cv2
 import torch
 import gspread as gs
 from oauth2client.service_account import ServiceAccountCredentials
-
+# import multiprocessing as mp
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+# def update_vector(row, column, vector, sheet):
+#     for em in vector:
+#         column += 1
+#         sheet.update_cell(row, column, str(em))
+
 
 class API:
 
-    def __init__(self):
+    def __init__(self, name, email_to_share):
         self.scope = ['https://spreadsheets.google.com/feeds',
                       'https://www.googleapis.com/auth/drive']
 
         self.credentials = ServiceAccountCredentials.from_json_keyfile_name('Emotions Project-481579272f6a.json',
                                                                             self. scope)
         self.client = gs.authorize(self.credentials)
+        self.sheet_name = name
+        self.email_to_share = email_to_share
 
-    def write_data(self, sheetname, vector, timestamp):
+    def write_data(self,  vector, timestamp):
         try:
-            sheet = self.client.open(sheetname)
+            sheet = self.client.open(self.sheet_name)
         except gs.exceptions.SpreadsheetNotFound:
-            sheet = self.client.create(sheetname)
-            sheet.share('iasizykh@miem.hse.ru', perm_type='user', role='writer')
+            sheet = self.client.create(self.sheet_name)
+            if isinstance(self.email_to_share, list):
+                for email in self.email_to_share:
+                    sheet.share(email, perm_type='user', role='writer')
+            else:
+                sheet.share(self.email_to_share, perm_type='user', role='write')
 
         row = 1
         column = 1
@@ -47,29 +59,65 @@ class API:
 
         if value == "":
             sheet.update_cell(row, column, timestamp)
+
+            # def update_vector(row, column, vector, sheet):
+            #     for em in vector:
+            #         column += 1
+            #         sheet.update_cell(row, column, str(em))
+
+            # pool = mp.Pool(mp.cpu_count())
             for em in vector:
                 column += 1
                 sheet.update_cell(row, column, str(em))
+
+
+            # pool.apply(update_vector, args=(row, column, vector, sheet))
             row += 1
             column = 1
 
         return row, column
 
-    def write_data(self, sheetname, vector, timestamp, last_row, last_column):
-        try:
-            sheet = self.client.open(sheetname)
-        except gs.exceptions.SpreadsheetNotFound:
-            sheet = self.client.create(sheetname)
-            sheet.share('iasizykh@miem.hse.ru', perm_type='user', role='writer')
-        sheet = sheet.sheet1
-        sheet.update_cell(last_row, last_column, timestamp)
-        for em in vector:
-            last_column += 1
-            sheet.update_cell(last_row, last_column, str(em))
-        last_row += 1
-        last_column = 1
-        return last_row, last_column
+    # def write_data(self, sheetname, vector, timestamp, last_row, last_column):
+    #     try:
+    #         sheet = self.client.open(sheetname)
+    #     except gs.exceptions.SpreadsheetNotFound:
+    #         sheet = self.client.create(sheetname)
+    #         sheet.share('iasizykh@miem.hse.ru', perm_type='user', role='writer')
+    #     sheet = sheet.sheet1
+    #     sheet.update_cell(last_row, last_column, timestamp)
+    #
+    #     # pool = mp.Pool(mp.cpu_count())
+    #     # pool.apply(update_vector, args=(last_row, last_column, vector, sheet))
+    #     # pool.close()
+    #     for em in vector:
+    #         last_column += 1
+    #         sheet.update_cell(last_row, last_column, str(em))
+    #     # for em in vector:
+    #     #     last_column += 1
+    #     #     p = mp.Process(target=sheet.update_cell, args=(last_row, last_column, em))
+    #     #     p.start()
+    #
+    #     last_row += 1
+    #     last_column = 1
+    #     return last_row, last_column
 
+    def write_table(self, table):
+        try:
+            sheet = self.client.open(self.sheet_name)
+        except gs.exceptions.SpreadsheetNotFound:
+            sheet = self.client.create(self.sheet_name)
+            if isinstance(self.email_to_share, list):
+                for email in self.email_to_share:
+                    sheet.share(email, perm_type='user', role='writer')
+            else:
+                sheet.share(self.email_to_share, perm_type='user', role='write')
+        sheet = sheet.sheet1
+        cell_list = sheet.range(1, 1, len(table), 8)
+
+        for i in range(len(cell_list) // 8):
+            for j in range(8):
+                cell_list[i*8 + j].value = table[i][j]
+        sheet.update_cells(cell_list)
 
 class Classifier(nn.Module):
 
@@ -96,6 +144,10 @@ class Classifier(nn.Module):
 
 
 class Emanalisis():
+
+    def __init__(self, sheet_name, email_to_share, cam_ip):
+        self.api = API(sheet_name, email_to_share)
+        self.ip = cam_ip    # TODO add jay check
 
     # from classifier by Sizykh Ivan
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -219,7 +271,7 @@ class Emanalisis():
     detector = None
     cfg = None
 
-    def run(self, ip, fps):
+    def run(self, fps):
 
         last_row = 1
         last_column = 1
@@ -227,8 +279,11 @@ class Emanalisis():
         # to load RetinaFace model
         if self.detector is None or self.cfg is None:
             self.prerun()
-
-        cap = cv2.VideoCapture(0)#self.uri.format(ip))
+        table = []
+        if self.ip == 0:
+            cap = cv2.VideoCapture(0)#self.uri.format(ip))
+        else:
+            cap = cv2.VideoCapture(self.uri.format(self.ip))
         i = 0
         while True:
 
@@ -319,13 +374,17 @@ class Emanalisis():
                             # make a prediction on the ROI, then lookup the class
                             preds = self.classifier(roi.to(self.device))[0]
                             label = self.class_labels[preds.argmax()]
-                            ###########
+                            preds = preds.tolist()
+                            # i is timestamp for temporal
+                            table.append([i, preds[0], preds[1],preds[2], preds[3], preds[4], preds[5], preds[6]])
 
-                            # reference to API TODO parallelize API and main part
-                            api = API()
-                            last_row, last_column = api.write_data('test1', preds.tolist(), 0, last_row, last_column)
-
-                            ######
+                            # ###########
+                            #
+                            # # reference to API
+                            # api = API()
+                            # last_row, last_column = api.write_data('test1', preds.tolist(), 0, last_row, last_column)
+                            #
+                            # ######
 
                             # os.chdir(r"D:/Projects/Vishka/3term/emotionsproject/emotions/crop")
                             # cv2.imwrite("crop_face " + str(count_crop) + ".jpg", gray_res)
@@ -353,7 +412,10 @@ class Emanalisis():
                 #         cv2.imwrite("detect_frame " + str(i) + ".jpg", img_raw)
 
             except:
-                cap = cv2.VideoCapture(self.uri.format(ip))
+                if self.ip == 0:
+                    cap = cv2.VideoCapture(0)
+                else:
+                    cap = cv2.VideoCapture(self.uri.format(self.ip))
                 continue
 
             if cv2.waitKey(1) == 13:
@@ -361,3 +423,5 @@ class Emanalisis():
             i += 1
         cap.release()
         cv2.destroyAllWindows()
+        self.api.write_table(table)
+
