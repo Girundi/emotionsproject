@@ -123,14 +123,14 @@ class Classifier(nn.Module):
 
     def __init__(self):
         super(Classifier, self).__init__()
-        # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO<<"^~^">>TODO
+        self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO <<"^~^">>
         self.pool = nn.MaxPool2d(2, 2)
         self.conv2 = nn.Conv2d(6, 24, 5)
         self.fc1 = nn.Linear(24 * 9 * 9, 486)
-        self.fc2 = nn.Linear(486, 84)
-        # self.fc3 = nn.Linear(120, 84).to(device)
-        self.fc3 = nn.Linear(84, 7)
+        self.fc2 = nn.Linear(486, 120)
+        self.fc3 = nn.Linear(120, 84)
+        self.fc4 = nn.Linear(84, 36)
+        self.fc5 = nn.Linear(36, 7)
 
     def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
@@ -138,22 +138,49 @@ class Classifier(nn.Module):
         x = x.view(-1, 24 * 9 * 9)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        # x = F.relu(self.fc3(x))
-        x = self.fc3(x)
+        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc4(x))
+        x = self.fc5(x)
         return x
+
+    # def __init__(self):
+    #     super(Classifier, self).__init__()
+    #     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    #     self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO<<"^~^">>TODO
+    #     self.pool = nn.MaxPool2d(2, 2)
+    #     self.conv2 = nn.Conv2d(6, 24, 5)
+    #     self.fc1 = nn.Linear(24 * 9 * 9, 486)
+    #     self.fc2 = nn.Linear(486, 84)
+    #     # self.fc3 = nn.Linear(120, 84).to(device)
+    #     self.fc3 = nn.Linear(84, 7)
+    #
+    # def forward(self, x):
+    #     x = self.pool(F.relu(self.conv1(x)))
+    #     x = self.pool(F.relu(self.conv2(x)))
+    #     x = x.view(-1, 24 * 9 * 9)
+    #     x = F.relu(self.fc1(x))
+    #     x = F.relu(self.fc2(x))
+    #     # x = F.relu(self.fc3(x))
+    #     x = self.fc3(x)
+    #     return x
 
 
 class Emanalisis():
 
     def __init__(self, sheet_name, email_to_share, cam_ip):
-        self.api = API(sheet_name, email_to_share)
+        self.save_into_sheet = True
+        if sheet_name == None or email_to_share == None:
+            self.save_into_sheet = False
+        if self.save_into_sheet:
+            self.api = API(sheet_name, email_to_share)
         self.ip = cam_ip    # TODO add jay check
 
     # from classifier by Sizykh Ivan
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     class_labels = ['ANGRY', 'DISGUST', 'FEAR', 'HAPPY', 'SAD', 'SURPRISE', 'NEUTRAL']
-    PATH = "./check_points_4/net_714.pth"
+    # PATH = "./check_points_4/net_714.pth"
+    PATH = "./check_points_8/net_249.pth"
     classifier = Classifier().to(device)
     classifier.load_state_dict(torch.load(PATH))
 
@@ -423,5 +450,6 @@ class Emanalisis():
             i += 1
         cap.release()
         cv2.destroyAllWindows()
-        self.api.write_table(table)
+        if self.save_into_sheet:
+            self.api.write_table(table)
 
