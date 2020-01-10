@@ -426,31 +426,53 @@ class Emanalisis():
                             ntable = np.asarray(table)
                             x = range(1, len(table) + 1)
                             x = np.asarray(x)
-                            if x[len(x) - 1] >= img_raw.shape[1]:
-                                scale = img_raw.shape[1] / x[len(x) - 1]
+                            if x[len(x) - 1] >= img_raw.shape[1] - 50:
+                                scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
                                 x = x * scale
-                            angry_scores = 40 - ntable[:, 1]
-                            disgust_scores = 40 - ntable[:, 2]
-                            fear_scores = 40 - ntable[:, 3]
-                            happy_scores = 40 - ntable[:, 4]
-                            sad_scores = 40 - ntable[:, 5]
-                            surprise_scores = 40 - ntable[:, 6]
-                            neutral_scores = 40 - ntable[:, 7]
+                            shift = img_raw.shape[0] - 40
+                            angry_scores = shift - ntable[:, 1]
+                            disgust_scores = shift - ntable[:, 2]
+                            fear_scores = shift - ntable[:, 3]
+                            happy_scores = shift - ntable[:, 4]
+                            sad_scores = shift - ntable[:, 5]
+                            surprise_scores = shift - ntable[:, 6]
+                            neutral_scores = shift - ntable[:, 7]
 
                             plot = np.vstack((x, angry_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 0, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[0], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1 )
+
                             plot = np.vstack((x, disgust_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 0))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[1], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0),1)
+
                             plot = np.vstack((x, fear_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(255, 255, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[2], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255),1)
+
                             plot = np.vstack((x, happy_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[3], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255),1)
+
                             plot = np.vstack((x, sad_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 153, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[4], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 153, 255),1)
+
                             plot = np.vstack((x, surprise_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 0, 76))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[5], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 0, 76),1)
+
                             plot = np.vstack((x, neutral_scores)).astype(np.int32).T
                             cv2.polylines(img_raw, [plot], isClosed=False, color=(96, 96, 96))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(img_raw, self.class_labels[6], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (96, 96, 96),1)
+
 
 
                             # plot = np.vstack((x, table))
