@@ -121,38 +121,16 @@ class API:
 
 class Classifier(nn.Module):
 
-    def __init__(self):
-        super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO <<"^~^">>
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 24, 5)
-        self.fc1 = nn.Linear(24 * 9 * 9, 486)
-        self.fc2 = nn.Linear(486, 120)
-        self.fc3 = nn.Linear(120, 84)
-        self.fc4 = nn.Linear(84, 36)
-        self.fc5 = nn.Linear(36, 7)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 24 * 9 * 9)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = F.relu(self.fc4(x))
-        x = self.fc5(x)
-        return x
-
     # def __init__(self):
     #     super(Classifier, self).__init__()
-    #     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    #     self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO<<"^~^">>TODO
+    #     self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO <<"^~^">>
     #     self.pool = nn.MaxPool2d(2, 2)
     #     self.conv2 = nn.Conv2d(6, 24, 5)
     #     self.fc1 = nn.Linear(24 * 9 * 9, 486)
-    #     self.fc2 = nn.Linear(486, 84)
-    #     # self.fc3 = nn.Linear(120, 84).to(device)
-    #     self.fc3 = nn.Linear(84, 7)
+    #     self.fc2 = nn.Linear(486, 120)
+    #     self.fc3 = nn.Linear(120, 84)
+    #     self.fc4 = nn.Linear(84, 36)
+    #     self.fc5 = nn.Linear(36, 7)
     #
     # def forward(self, x):
     #     x = self.pool(F.relu(self.conv1(x)))
@@ -160,9 +138,31 @@ class Classifier(nn.Module):
     #     x = x.view(-1, 24 * 9 * 9)
     #     x = F.relu(self.fc1(x))
     #     x = F.relu(self.fc2(x))
-    #     # x = F.relu(self.fc3(x))
-    #     x = self.fc3(x)
+    #     x = F.relu(self.fc3(x))
+    #     x = F.relu(self.fc4(x))
+    #     x = self.fc5(x)
     #     return x
+
+    def __init__(self):
+        super(Classifier, self).__init__()
+        # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.conv1 = nn.Conv2d(1, 6, 5)  # # # TODO<<"^~^">>TODO
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 24, 5)
+        self.fc1 = nn.Linear(24 * 9 * 9, 486)
+        self.fc2 = nn.Linear(486, 84)
+        # self.fc3 = nn.Linear(120, 84).to(device)
+        self.fc3 = nn.Linear(84, 7)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 24 * 9 * 9)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        # x = F.relu(self.fc3(x))
+        x = self.fc3(x)
+        return x
 
 
 class Emanalisis():
@@ -180,7 +180,7 @@ class Emanalisis():
 
     class_labels = ['ANGRY', 'DISGUST', 'FEAR', 'HAPPY', 'SAD', 'SURPRISE', 'NEUTRAL']
     # PATH = "./check_points_4/net_714.pth"
-    PATH = "./check_points_8/net_249.pth"
+    PATH = "./check_points_4/net_714.pth"
     classifier = Classifier().to(device)
     classifier.load_state_dict(torch.load(PATH))
 
@@ -423,6 +423,38 @@ class Emanalisis():
                             # label_position = (b[0] + int((b[1] / 2)), b[2] + 25)
                             cv2.putText(img_raw, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
 
+                            ntable = np.asarray(table)
+                            x = range(1, len(table) + 1)
+                            x = np.asarray(x)
+                            if x[len(x) - 1] >= img_raw.shape[1]:
+                                scale = img_raw.shape[1] / x[len(x) - 1]
+                                x = x * scale
+                            angry_scores = 40 - ntable[:, 1]
+                            disgust_scores = 40 - ntable[:, 2]
+                            fear_scores = 40 - ntable[:, 3]
+                            happy_scores = 40 - ntable[:, 4]
+                            sad_scores = 40 - ntable[:, 5]
+                            surprise_scores = 40 - ntable[:, 6]
+                            neutral_scores = 40 - ntable[:, 7]
+
+                            plot = np.vstack((x, angry_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 0, 255))
+                            plot = np.vstack((x, disgust_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 0))
+                            plot = np.vstack((x, fear_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(255, 255, 255))
+                            plot = np.vstack((x, happy_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 255))
+                            plot = np.vstack((x, sad_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 153, 255))
+                            plot = np.vstack((x, surprise_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 0, 76))
+                            plot = np.vstack((x, neutral_scores)).astype(np.int32).T
+                            cv2.polylines(img_raw, [plot], isClosed=False, color=(96, 96, 96))
+
+
+                            # plot = np.vstack((x, table))
+
                             # dots on facial features
 
                             # cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
@@ -432,6 +464,12 @@ class Emanalisis():
                             # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
 
 
+                    if img_raw.shape[1] >= 1000:
+                        persent = 50
+                        width = int(img_raw.shape[1] * persent / 100)
+                        height = int(img_raw.shape[0] * persent / 100)
+                        new_shape = (width, height)
+                        img_raw = cv2.resize(img_raw, new_shape, interpolation=cv2.INTER_AREA)
                     cv2.imshow('Face Detector', img_raw)
 
                 # save image
