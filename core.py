@@ -167,13 +167,23 @@ class Classifier(nn.Module):
 
 class Emanalisis():
 
-    def __init__(self, sheet_name, email_to_share, cam_ip):
+    def __init__(self, mode, sheet_name, email_to_share, channel):
         self.save_into_sheet = True
         if sheet_name == None or email_to_share == None:
             self.save_into_sheet = False
         if self.save_into_sheet:
             self.api = API(sheet_name, email_to_share)
-        self.ip = cam_ip    # TODO add jay check
+        uri = 'rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'
+        self.mode = mode
+        if mode == 0:
+            self.channel = 0    # webcam
+        elif mode == 1:         # ip camera
+            self.channel = uri.format(channel)
+        elif mode == 2:         # video
+            self.channel = channel
+
+
+
 
     # from classifier by Sizykh Ivan
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -245,23 +255,18 @@ class Emanalisis():
         ret, frame = cap.read()
         t = time.time()
         ret = True
-        count_frames = 0
-        os.chdir(r"frames")
-
+        # os.chdir(r"frames")
+        out_arr = []
         while ret:
             ret, frame = cap.read()
             if time.time() - t >= fps:
                 t = time.time()
-                cv2.imwrite("frame " + str(count_frames) + ".jpg", frame)
-                count_frames += 1
-        return count_frames
+                out_arr.append(frame)
+                # cv2.imwrite("frame " + str(count_frames) + ".jpg", frame)
 
-    def make_video(self, count_frames, num_fps):
-        filelist = []
-        for i in range(count_frames):
-            image_path = ("D:/Projects/Vishka/3term/emotionsproject/emotions/detect_frames/detect_frame %d.jpg" % i)
-            filelist.append(image_path)
-        frames = [cv2.imread(fname) for fname in filelist]
+        return np.asarray(out_arr)
+
+    def make_video(self, frames, num_fps):
 
         writer = cv2.VideoWriter(
             'output.mp4',
@@ -276,7 +281,6 @@ class Emanalisis():
     # to run
     resize = 1
     # ip = '172.18.191.137'
-    uri = 'rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'
 
     def prerun(self):
         torch.set_grad_enabled(False)
@@ -298,7 +302,7 @@ class Emanalisis():
     detector = None
     cfg = None
 
-    def run(self, fps):
+    def run(self, fps_factor):
 
         last_row = 1
         last_column = 1
@@ -307,16 +311,14 @@ class Emanalisis():
         if self.detector is None or self.cfg is None:
             self.prerun()
         table = []
-        if self.ip == 0:
-            cap = cv2.VideoCapture(0)#self.uri.format(ip))
-        else:
-            cap = cv2.VideoCapture(self.uri.format(self.ip))
+        frames = []
+        cap = cv2.VideoCapture(self.channel)#self.uri.format(ip))
         i = 0
         while True:
 
             ret, img_raw = cap.read()
             try:
-                if i % fps == 0:
+                if i % fps_factor == 0:
                     img = np.float32(img_raw)
 
                     im_height, im_width, _ = img.shape
@@ -426,9 +428,9 @@ class Emanalisis():
                             ntable = np.asarray(table)
                             x = range(1, len(table) + 1)
                             x = np.asarray(x)
-                            if x[len(x) - 1] >= img_raw.shape[1] - 50:
-                                scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
-                                x = x * scale
+                            # if x[len(x) - 1] >= img_raw.shape[1] - 50:
+                            scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
+                            x = x * scale
                             shift = img_raw.shape[0] - 40
                             angry_scores = shift - ntable[:, 1]
                             disgust_scores = shift - ntable[:, 2]
@@ -493,16 +495,17 @@ class Emanalisis():
                         new_shape = (width, height)
                         img_raw = cv2.resize(img_raw, new_shape, interpolation=cv2.INTER_AREA)
                     cv2.imshow('Face Detector', img_raw)
+                    frames.append(img_raw)
 
                 # save image
                 #         os.chdir(r"D:/Projects/Vishka/3term/emotionsproject/emotions/detect_frames")
                 #         cv2.imwrite("detect_frame " + str(i) + ".jpg", img_raw)
 
             except:
-                if self.ip == 0:
+                if self.channel == 0:
                     cap = cv2.VideoCapture(0)
                 else:
-                    cap = cv2.VideoCapture(self.uri.format(self.ip))
+                    cap = cv2.VideoCapture(self.channel)
                 continue
 
             if cv2.waitKey(1) == 13:
@@ -510,6 +513,9 @@ class Emanalisis():
             i += 1
         cap.release()
         cv2.destroyAllWindows()
+        if self.mode == 2:
+            self.make_video(frames, 25/fps_factor)
+
         if self.save_into_sheet:
             self.api.write_table(table)
 
