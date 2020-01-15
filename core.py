@@ -15,6 +15,8 @@ import cv2
 import torch
 import gspread as gs
 from oauth2client.service_account import ServiceAccountCredentials
+import matplotlib.pyplot as plt
+
 # import multiprocessing as mp
 # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -167,19 +169,22 @@ class Classifier(nn.Module):
 
 class Emanalisis():
 
-    def __init__(self, mode, sheet_name, email_to_share, channel):
+    def __init__(self, input_mode = 0, output_mode = 0, record_video = False,
+                 sheet_name = None, email_to_share = None, channel = 0):
         self.save_into_sheet = True
         if sheet_name == None or email_to_share == None:
             self.save_into_sheet = False
         if self.save_into_sheet:
             self.api = API(sheet_name, email_to_share)
         uri = 'rtsp://admin:Supervisor@{}:554/Streaming/Channels/1'
-        self.mode = mode
-        if mode == 0:
+        self.input_mode = input_mode
+        self.output_mode = output_mode      # 0 - pretty display, 1 - separate graph
+        self.record_video = record_video
+        if input_mode == 0:
             self.channel = 0    # webcam
-        elif mode == 1:         # ip camera
+        elif input_mode == 1:         # ip camera
             self.channel = uri.format(channel)
-        elif mode == 2:         # video
+        elif input_mode == 2:         # video
             self.channel = channel
 
 
@@ -304,6 +309,7 @@ class Emanalisis():
 
     def run(self, fps_factor):
 
+
         last_row = 1
         last_column = 1
 
@@ -314,6 +320,31 @@ class Emanalisis():
         frames = []
         cap = cv2.VideoCapture(self.channel)#self.uri.format(ip))
         i = 0
+        x = []
+        angry_scores = []
+        disgust_scores = []
+        fear_scores = []
+        happy_scores = []
+        sad_scores = []
+        surprise_scores = []
+        neutral_scores = []
+
+        # if x[len(x) - 1] >= img_raw.shape[1] - 50:
+        if self.output_mode == 1:
+            plt.ion()
+            figure = plt.figure()
+            ax = figure.add_subplot(111)
+            angry_graph, = ax.plot(0, 0, 'r-', label=self.class_labels[0])
+            disgust_graph, = ax.plot(0,0, 'g-', label=self.class_labels[1])
+            fear_graph, = ax.plot(0,0, 'k-', label=self.class_labels[2])
+            happy_graph, = ax.plot(0,0, 'y-', label=self.class_labels[3])
+            sad_graph, = ax.plot(0,0, 'c-', label=self.class_labels[4])
+            surprise_graph, = ax.plot(0,0,'m-', label=self.class_labels[5])
+            neutral_graph, = ax.plot(0,0,'b-', label=self.class_labels[6])
+            ax.legend()
+
+        # if self.output_mode == 1:
+        #     line1, = plt.plot(0, 0, 'ko-')
         while True:
 
             ret, img_raw = cap.read()
@@ -328,7 +359,7 @@ class Emanalisis():
                     img = torch.from_numpy(img).unsqueeze(0)
                     img = img.to(self.device)
                     scale = scale.to(self.device)
-
+                    # graph = 0
                     tic = time.time()
                     loc, conf, landms = self.detector(img)  # forward pass
                     print('net forward time: {:.4f}'.format(time.time() - tic))
@@ -374,6 +405,8 @@ class Emanalisis():
 
                     dets = np.concatenate((dets, landms), axis=1)
 
+
+
                     # show image
                     for b in dets:
                         if b[4] < self.args.vis_thres:
@@ -405,6 +438,7 @@ class Emanalisis():
                             label = self.class_labels[preds.argmax()]
                             preds = preds.tolist()
                             # i is timestamp for temporal
+
                             table.append([i, preds[0], preds[1],preds[2], preds[3], preds[4], preds[5], preds[6]])
 
                             # ###########
@@ -424,56 +458,75 @@ class Emanalisis():
                             #             cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
                             # label_position = (b[0] + int((b[1] / 2)), b[2] + 25)
                             cv2.putText(img_raw, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
-
                             ntable = np.asarray(table)
                             x = range(1, len(table) + 1)
                             x = np.asarray(x)
-                            # if x[len(x) - 1] >= img_raw.shape[1] - 50:
-                            scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
-                            x = x * scale
-                            shift = img_raw.shape[0] - 40
-                            angry_scores = shift - ntable[:, 1]
-                            disgust_scores = shift - ntable[:, 2]
-                            fear_scores = shift - ntable[:, 3]
-                            happy_scores = shift - ntable[:, 4]
-                            sad_scores = shift - ntable[:, 5]
-                            surprise_scores = shift - ntable[:, 6]
-                            neutral_scores = shift - ntable[:, 7]
+                            shift = 0
+                            angry_scores = ntable[:, 1]
+                            disgust_scores = ntable[:, 2]
+                            fear_scores = ntable[:, 3]
+                            happy_scores = ntable[:, 4]
+                            sad_scores = ntable[:, 5]
+                            surprise_scores = ntable[:, 6]
+                            neutral_scores = ntable[:, 7]
 
-                            plot = np.vstack((x, angry_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 0, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[0], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1 )
+                            if self.output_mode == 0:
+                                scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
+                                x = x * scale
 
-                            plot = np.vstack((x, disgust_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 0))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[1], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0),1)
+                                shift = img_raw.shape[0] - 40
+                                angry_scores = shift - ntable[:, 1]
+                                disgust_scores = shift - ntable[:, 2]
+                                fear_scores = shift - ntable[:, 3]
+                                happy_scores = shift - ntable[:, 4]
+                                sad_scores = shift - ntable[:, 5]
+                                surprise_scores = shift - ntable[:, 6]
+                                neutral_scores = shift - ntable[:, 7]
 
-                            plot = np.vstack((x, fear_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(255, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[2], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255),1)
+                                plot = np.vstack((x, angry_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 0, 255))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[0], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1 )
 
-                            plot = np.vstack((x, happy_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[3], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255),1)
+                                plot = np.vstack((x, disgust_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 0))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[1], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 0),1)
 
-                            plot = np.vstack((x, sad_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 153, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[4], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 153, 255),1)
+                                plot = np.vstack((x, fear_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(255, 255, 255))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[2], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255),1)
 
-                            plot = np.vstack((x, surprise_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 0, 76))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[5], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 0, 76),1)
+                                plot = np.vstack((x, happy_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(0, 255, 255))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[3], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 255, 255),1)
 
-                            plot = np.vstack((x, neutral_scores)).astype(np.int32).T
-                            cv2.polylines(img_raw, [plot], isClosed=False, color=(96, 96, 96))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(img_raw, self.class_labels[6], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (96, 96, 96),1)
+                                plot = np.vstack((x, sad_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 153, 255))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[4], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 153, 255),1)
+
+                                plot = np.vstack((x, surprise_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(153, 0, 76))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[5], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (153, 0, 76),1)
+
+                                plot = np.vstack((x, neutral_scores)).astype(np.int32).T
+                                cv2.polylines(img_raw, [plot], isClosed=False, color=(96, 96, 96))
+                                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                                cv2.putText(img_raw, self.class_labels[6], cord, cv2.FONT_HERSHEY_SIMPLEX, 0.3, (96, 96, 96),1)
+                            # elif self.output_mode == 1:
+                            #     line1, = plt.plot(x, angry_scores, 'ko-')
+                                # figure = plt.figure()
+                                # figure.add_subplot(111)
+                                # line1.set_ydata(angry_scores)
+                                # figure.convas.draw()
+                                # graph = np.fromstring(figure.convas.tostring_rgb(), dtype=np.uint8, sep='')
+                                # graph = graph.reshape(figure.canvas.get_width_height()[::-1] + (3, ))
+                                # graph = cv2.cvtColor(graph, cv2.COLOR_RGB2BGR)
+
 
 
 
@@ -487,7 +540,7 @@ class Emanalisis():
                             # cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
                             # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
 
-
+                    frames.append(img_raw)
                     if img_raw.shape[1] >= 1000:
                         persent = 50
                         width = int(img_raw.shape[1] * persent / 100)
@@ -495,7 +548,28 @@ class Emanalisis():
                         new_shape = (width, height)
                         img_raw = cv2.resize(img_raw, new_shape, interpolation=cv2.INTER_AREA)
                     cv2.imshow('Face Detector', img_raw)
-                    frames.append(img_raw)
+                    if self.output_mode == 1:
+                        angry_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        angry_graph.set_ydata(angry_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        disgust_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        disgust_graph.set_ydata(disgust_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        fear_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        fear_graph.set_ydata(fear_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        happy_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        happy_graph.set_ydata(happy_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        sad_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        sad_graph.set_ydata(sad_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        surprise_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        surprise_graph.set_ydata(surprise_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        neutral_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+                        neutral_graph.set_ydata(neutral_scores[x.shape[0] - 100:x.shape[0] - 1])
+
+
+                        figure.canvas.draw()
+                        figure.canvas.flush_events()
+                        axa = plt.gca()
+                        axa.relim()
+                        axa.autoscale_view(True, True, True)
 
                 # save image
                 #         os.chdir(r"D:/Projects/Vishka/3term/emotionsproject/emotions/detect_frames")
@@ -513,7 +587,7 @@ class Emanalisis():
             i += 1
         cap.release()
         cv2.destroyAllWindows()
-        if self.mode == 2:
+        if self.record_video:
             self.make_video(frames, 25/fps_factor)
 
         if self.save_into_sheet:
