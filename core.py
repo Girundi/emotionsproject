@@ -118,12 +118,13 @@ class API:
                 else:
                     sheet.share(self.email_to_share, perm_type='user', role='writer')
         sheet = sheet.sheet1
-        cell_list = sheet.range(1, 1, len(table), 8)
 
-        for i in range(len(cell_list) // 8):
-            for j in range(8):
-                cell_list[i*8 + j].value = table[i][j]
-        sheet.update_cells(cell_list)
+        if len(table) != 0:
+            cell_list = sheet.range(1, 1, len(table), 8)
+            for i in range(len(cell_list) // 8):
+                for j in range(8):
+                    cell_list[i*8 + j].value = table[i][j]
+            sheet.update_cells(cell_list)
 
 class Classifier(nn.Module):
 
