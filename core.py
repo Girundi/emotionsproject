@@ -8,6 +8,7 @@ from utils.nms.py_cpu_nms import py_cpu_nms
 from models.retinaface import RetinaFace
 from utils.box_utils import decode, decode_landm
 import time
+import datetime
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -38,6 +39,7 @@ class API:
         self.client = gs.authorize(self.credentials)
         self.sheet_name = name
         self.email_to_share = email_to_share
+        self.sheet_shared = False
 
     def write_data(self,  vector, timestamp):
         try:
@@ -108,11 +110,13 @@ class API:
             sheet = self.client.open(self.sheet_name)
         except gs.exceptions.SpreadsheetNotFound:
             sheet = self.client.create(self.sheet_name)
-            if isinstance(self.email_to_share, list):
-                for email in self.email_to_share:
-                    sheet.share(email, perm_type='user', role='writer')
-            else:
-                sheet.share(self.email_to_share, perm_type='user', role='write')
+            if not self.sheet_shared:
+                self.sheet_shared = True
+                if isinstance(self.email_to_share, list):
+                    for email in self.email_to_share:
+                        sheet.share(email, perm_type='user', role='writer')
+                else:
+                    sheet.share(self.email_to_share, perm_type='user', role='writer')
         sheet = sheet.sheet1
         cell_list = sheet.range(1, 1, len(table), 8)
 
@@ -184,6 +188,7 @@ class Emanalisis():
             self.channel = 0    # webcam
         elif input_mode == 1:         # ip camera
             self.channel = uri.format(channel)
+            self.ip = channel
         elif input_mode == 2:         # video
             self.channel = channel
 
@@ -272,9 +277,16 @@ class Emanalisis():
         return np.asarray(out_arr)
 
     def make_video(self, frames, num_fps):
-
+        mode = ""
+        if self.input_mode == 0:
+            mode = "wc_"
+        elif self.input_mode == 1:
+            mode = self.ip
+        elif self.input_mode == 2:
+            mode = str(self.channel) # datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+        string = "./" + mode + datetime.datetime.now().strftime("%Y-%m-%d") + ".mp4"
         writer = cv2.VideoWriter(
-            'output.mp4',
+            string,
             cv2.VideoWriter_fourcc(*'MP4V'),  # codec
             num_fps,  # fps
             (frames[0].shape[1], frames[0].shape[0]))  # width, height
@@ -462,6 +474,10 @@ class Emanalisis():
                             x = range(1, len(table) + 1)
                             x = np.asarray(x)
                             shift = 0
+
+                            def softmax(x):
+                                return np.exp(x) / sum(np.exp(x))
+                            ntable = softmax(ntable)
                             angry_scores = ntable[:, 1]
                             disgust_scores = ntable[:, 2]
                             fear_scores = ntable[:, 3]
@@ -471,6 +487,7 @@ class Emanalisis():
                             neutral_scores = ntable[:, 7]
 
                             if self.output_mode == 0:
+                                ntable = ntable * 50
                                 scale = (img_raw.shape[1] - 50) / x[len(x) - 1]
                                 x = x * scale
 
@@ -548,6 +565,10 @@ class Emanalisis():
                         new_shape = (width, height)
                         img_raw = cv2.resize(img_raw, new_shape, interpolation=cv2.INTER_AREA)
                     cv2.imshow('Face Detector', img_raw)
+
+                    if self.save_into_sheet and i % 25 == 0:
+                        self.api.write_table(table)
+
                     if self.output_mode == 1:
                         angry_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
                         angry_graph.set_ydata(angry_scores[x.shape[0] - 100:x.shape[0] - 1])
@@ -590,6 +611,4 @@ class Emanalisis():
         if self.record_video:
             self.make_video(frames, 25/fps_factor)
 
-        if self.save_into_sheet:
-            self.api.write_table(table)
 
