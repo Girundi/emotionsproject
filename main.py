@@ -16,4 +16,4 @@ while True:
             else:
                 filename = "./" + now.strftime("%Y-%m-%d_%H:%M")
 
-            a.run(filename=filename, fps_factor=25, stop_time=180)
+            a.run(filename=filename, fps_factor=25, stop_time=1800)
