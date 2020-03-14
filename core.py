@@ -161,9 +161,10 @@ class Emanalisis():
         PATH = "./net_714.pth"
         if self.on_gpu:
             self.classifier = Classifier().to(self.device)
+            self.classifier.load_state_dict(torch.load(PATH))
         else:
             self.classifier = Classifier()
-        self.classifier.load_state_dict(torch.load(PATH))
+            self.classifier.load_state_dict(torch.load(PATH, map_location={'cuda:0': 'cpu'}))
 
         # from detector by Belyakova Katerina
         self.parser = argparse.ArgumentParser(description='Retinaface')
