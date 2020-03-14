@@ -24,62 +24,62 @@ import platform
 
 class API:
 
-    def __init__(self, name, email_to_share):
+    def __init__(self, email_to_share):
         self.scope = ['https://spreadsheets.google.com/feeds',
                       'https://www.googleapis.com/auth/drive']
 
         self.credentials = ServiceAccountCredentials.from_json_keyfile_name('Emotions Project-481579272f6a.json',
                                                                             self.scope)
         self.client = gs.authorize(self.credentials)
-        self.sheet_name = name
+        # self.sheet_name = name
         self.email_to_share = email_to_share
         self.sheet_shared = False
         self.nvr_key = {"key": "99a1dfb5342546319e3d5f4de7150f05"}
         self.nvr_url = 'https://nvr.miem.hse.ru/api/gdrive-upload/504'
 
-    def write_data(self,  vector, timestamp):
+    # def write_data(self,  vector, timestamp):
+    #     try:
+    #         sheet = self.client.open(self.sheet_name)
+    #     except gs.exceptions.SpreadsheetNotFound:
+    #         sheet = self.client.create(self.sheet_name)
+    #         if isinstance(self.email_to_share, list):
+    #             for email in self.email_to_share:
+    #                 sheet.share(email, perm_type='user', role='writer')
+    #         else:
+    #             sheet.share(self.email_to_share, perm_type='user', role='write')
+    #
+    #     row = 1
+    #     column = 1
+    #     sheet = sheet.sheet1
+    #     value = sheet.cell(row, column).value
+    #     if value != "":
+    #         while value != "":
+    #             row += 1
+    #             value = sheet.cell(row, column).value
+    #
+    #     if value == "":
+    #         sheet.update_cell(row, column, timestamp)
+    #
+    #         # def update_vector(row, column, vector, sheet):
+    #         #     for em in vector:
+    #         #         column += 1
+    #         #         sheet.update_cell(row, column, str(em))
+    #
+    #         # pool = mp.Pool(mp.cpu_count())
+    #         for em in vector:
+    #             column += 1
+    #             sheet.update_cell(row, column, str(em))
+    #
+    #         row += 1
+    #         column = 1
+    #
+    #     return row, column
+
+    def write_table(self, filename, table):
         try:
-            sheet = self.client.open(self.sheet_name)
+            sheet = self.client.open(filename)
         except gs.exceptions.SpreadsheetNotFound:
-            sheet = self.client.create(self.sheet_name)
-            if isinstance(self.email_to_share, list):
-                for email in self.email_to_share:
-                    sheet.share(email, perm_type='user', role='writer')
-            else:
-                sheet.share(self.email_to_share, perm_type='user', role='write')
-
-        row = 1
-        column = 1
-        sheet = sheet.sheet1
-        value = sheet.cell(row, column).value
-        if value != "":
-            while value != "":
-                row += 1
-                value = sheet.cell(row, column).value
-
-        if value == "":
-            sheet.update_cell(row, column, timestamp)
-
-            # def update_vector(row, column, vector, sheet):
-            #     for em in vector:
-            #         column += 1
-            #         sheet.update_cell(row, column, str(em))
-
-            # pool = mp.Pool(mp.cpu_count())
-            for em in vector:
-                column += 1
-                sheet.update_cell(row, column, str(em))
-
-            row += 1
-            column = 1
-
-        return row, column
-
-    def write_table(self, table):
-        try:
-            sheet = self.client.open(self.sheet_name)
-        except gs.exceptions.SpreadsheetNotFound:
-            sheet = self.client.create(self.sheet_name)
+            sheet = self.client.create(filename)
             if not self.sheet_shared:
                 self.sheet_shared = True
                 if isinstance(self.email_to_share, list):
@@ -126,15 +126,15 @@ class Classifier(nn.Module):
 class Emanalisis():
 
     def __init__(self, input_mode = 0, output_mode = 0, record_video = False,
-                 sheet_name = None, email_to_share = None, channel = 0, on_gpu = False,
+                 email_to_share = None, channel = 0, on_gpu = False,
                  display = False, only_headcount = False, send_to_nvr = False):
         self.save_into_sheet = True
         self.on_gpu = on_gpu
         self.send_to_nvr = send_to_nvr
-        if sheet_name == None or email_to_share == None:
+        if email_to_share == None:
             self.save_into_sheet = False
         if self.save_into_sheet or self.send_to_nvr:
-            self.api = API(sheet_name, email_to_share)
+            self.api = API(email_to_share)
         uri = 'rtsp://admin:Supervisor@{}:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif'
         self.input_mode = input_mode
         self.output_mode = output_mode      # 0 - pretty display, 1 - separate graph, 2 - graph with black background
@@ -237,7 +237,7 @@ class Emanalisis():
 
         return np.asarray(out_arr)
 
-    def make_video(self, frames, num_fps):
+    def make_video(self, filename, frames, num_fps):
         mode = ""
         if self.input_mode == 0:
             mode = "wc_"
@@ -246,10 +246,7 @@ class Emanalisis():
         elif self.input_mode == 2:
             mode = str(self.channel) # datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 
-        if platform.system() == 'Windows':
-            string = "./" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%m") + ".mp4"
-        else:
-            string = "./" + datetime.datetime.now().strftime("%Y-%m-%d_%H:%m") + ".mp4"
+        string = './' + filename + '.mp4'
 
         writer = cv2.VideoWriter(
                 string,
@@ -290,7 +287,7 @@ class Emanalisis():
     detector = None
     cfg = None
 
-    def run(self, fps_factor=1, stop_time=-1):
+    def run(self, filename, fps_factor=1, stop_time=-1):
 
         last_row = 1
         last_column = 1
@@ -435,14 +432,6 @@ class Emanalisis():
                                 # i is timestamp for temporal
 
                                 table.append([i, preds[0], preds[1],preds[2], preds[3], preds[4], preds[5], preds[6]])
-
-                                # ###########
-                                #
-                                # # reference to API
-                                # api = API()
-                                # last_row, last_column = api.write_data('test1', preds.tolist(), 0, last_row, last_column)
-                                #
-                                # ######
                             if self.output_mode != 2:
                                 cv2.rectangle(display_img, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
                                 cx = b[0]
@@ -456,7 +445,7 @@ class Emanalisis():
                     if not self.only_headcount:
                         ntable = np.asarray(table)
                         shift = 0
-                        nemotions_lapse = np.asarray(emotions_lapse) * display_img.shape[0] / (1.5*head_count)
+                        nemotions_lapse = np.asarray(emotions_lapse) * display_img.shape[0] / (2*head_count)
                         x = range(1, len(emotions_lapse) + 1)
                         x = np.asarray(x)
 
@@ -471,6 +460,9 @@ class Emanalisis():
                         unchanged_surprise_scores = np.asarray(emotions_lapse)[:, 5]
                         unchanged_neutral_scores = np.asarray(emotions_lapse)[:, 6]
 
+                        # attention_coef = np.max(np.max(np.flip(emotions_lapse)[0,:],axis=0)) / head_count
+                        attention_coef = (np.max(emotions_count)) / head_count
+                        # attention_coef = np.mean(emotions_count) / np.max(emotions_count)
 
                     if self.output_mode == 0 or self.output_mode == 2:
                         if not self.only_headcount:
@@ -485,66 +477,77 @@ class Emanalisis():
 
 
                             shift = display_img.shape[0] / 2 - 10
-                            angry_scores = shift + nemotions_lapse[:, 0]
-                            disgust_scores = shift + nemotions_lapse[:, 1]
-                            fear_scores = shift + nemotions_lapse[:, 2]
-                            happy_scores = shift - nemotions_lapse[:, 3]
-                            sad_scores = shift + nemotions_lapse[:, 4]
-                            surprise_scores = shift - nemotions_lapse[:, 5]
-                            neutral_scores = shift - nemotions_lapse[:, 6]
+                            # angry_scores = shift + nemotions_lapse[:, 0]
+                            # disgust_scores = shift + nemotions_lapse[:, 1]
+                            # fear_scores = shift + nemotions_lapse[:, 2]
+                            # happy_scores = shift - nemotions_lapse[:, 3]
+                            # sad_scores = shift + nemotions_lapse[:, 4]
+                            # surprise_scores = shift - nemotions_lapse[:, 5]
+                            # neutral_scores = shift - nemotions_lapse[:, 6]
 
-                            plot = np.vstack((x, angry_scores)).astype(np.int32).T
+                            possitive_scores = shift - nemotions_lapse[:,3] - nemotions_lapse[:,5] - \
+                                               nemotions_lapse[:,6]
+                            negative_scores = shift + nemotions_lapse[:, 0] + nemotions_lapse[:, 1] + \
+                                              nemotions_lapse[:, 2] + nemotions_lapse[:, 4]
+                            possitive_sum = unchanged_happy_scores + unchanged_surprise_scores + \
+                                            unchanged_neutral_scores
+                            negative_sum = unchanged_angry_scores + unchanged_disgust_scores + unchanged_fear_scores \
+                                           + unchanged_sad_scores
+
+                            plot = np.vstack((x, possitive_scores)).astype(np.int32).T
                             cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 0, 255))
                             cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
                             cv2.putText(display_img,
-                                        self.class_labels[0] + " " + str(int(np.flip(unchanged_angry_scores)[0])),
+                                        "possitive " + str(int(np.flip(possitive_sum)[0])),
                                         cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1 )
 
-                            plot = np.vstack((x, disgust_scores)).astype(np.int32).T
+                            plot = np.vstack((x, negative_scores)).astype(np.int32).T
                             cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 0))
                             cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
                             cv2.putText(display_img,
-                                        self.class_labels[1] + " " + str(int(np.flip(unchanged_disgust_scores)[0]))
+                                        "negative " + str(int(np.flip(negative_sum)[0]))
                                         , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0),1)
 
-                            plot = np.vstack((x, fear_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(255, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255),1)
+                            # plot = np.vstack((x, fear_scores)).astype(np.int32).T
+                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(255, 255, 255))
+                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            # cv2.putText(display_img,
+                            #             self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
+                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255),1)
+                            #
+                            # plot = np.vstack((x, happy_scores)).astype(np.int32).T
+                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 255))
+                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            # cv2.putText(display_img,
+                            #             self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
+                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255),1)
+                            #
+                            # plot = np.vstack((x, sad_scores)).astype(np.int32).T
+                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 153, 255))
+                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            # cv2.putText(display_img,
+                            #             self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
+                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255),1)
+                            #
+                            # plot = np.vstack((x, surprise_scores)).astype(np.int32).T
+                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 0, 76))
+                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            # cv2.putText(display_img,
+                            #             self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
+                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76),1)
+                            #
+                            # plot = np.vstack((x, neutral_scores)).astype(np.int32).T
+                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(96, 96, 96))
+                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            # cv2.putText(display_img,
+                            #             self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
+                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96),1)
 
-                            plot = np.vstack((x, happy_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255),1)
 
-                            plot = np.vstack((x, sad_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 153, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255),1)
-
-                            plot = np.vstack((x, surprise_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 0, 76))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76),1)
-
-                            plot = np.vstack((x, neutral_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(96, 96, 96))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96),1)
-
-                        cv2.putText(display_img, "Head count: " + str(head_count),
-                                    (5,30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60,20,220))
-
+                    cv2.putText(display_img, "Head count: " + str(head_count),
+                                (5,30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60,20,220))
+                    cv2.putText(display_img, "Attention coef: " + str(round(attention_coef, 2)),
+                                (400, 30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60, 20, 220))
 
 
 
@@ -560,9 +563,9 @@ class Emanalisis():
                             # cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
                             # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
 
-                    if self.record_video:
+                    if self.record_video and self.output_mode != 1:
                         frames.append(display_img)
-                    if img_raw.shape[1] >= 1000:
+                    if display_img.shape[1] >= 1000:
                         persent = 50
                         width = int(display_img.shape[1] * persent / 100)
                         height = int(display_img.shape[0] * persent / 100)
@@ -571,8 +574,8 @@ class Emanalisis():
                     if self.display:
                         cv2.imshow('Face Detector', display_img)
 
-                    if self.save_into_sheet and i % 25 == 0:
-                        self.api.write_table(table)
+                    if self.save_into_sheet and i % fps_factor == 0:
+                        self.api.write_table(filename, table)
 
                     if self.output_mode == 1:
                         angry_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
@@ -596,18 +599,25 @@ class Emanalisis():
                         axa = plt.gca()
                         axa.relim()
                         axa.autoscale_view(True, True, True)
+                        if self.record_video:
+                            figure.tight_layout(pad=0)
+                            axa.margins(0)
+                            plot = np.frombuffer(figure.canvas.tostring_rgb(), dtype=np.uint8)
+                            plot = plot.reshape(figure.canvas.get_width_height()[::-1] + (3, ))
+                            frames.append(plot)
 
             except:
                 cap = cv2.VideoCapture(self.channel)
                 continue
 
-            if cv2.waitKey(1) == 13 or time.time() - start_time == stop_time:
+            if cv2.waitKey(1) == 13 or time.time() - start_time >= stop_time:
                 break
             i += 1
         cap.release()
         cv2.destroyAllWindows()
+        plt.close()
         if self.record_video:
-            filename = self.make_video(frames, 25/fps_factor)
+            video = self.make_video(filename, frames, 25/fps_factor)
             if self.send_to_nvr:
-                self.api.send_to_nvr(filename)
+                self.api.send_to_nvr(video)
 
