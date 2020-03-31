@@ -20,22 +20,23 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import requests
 import platform
+import secrets
 
 
 class API:
-
+    """Class for connecting sending raw data into google sheets and to miem nvr"""
     def __init__(self, email_to_share):
         self.scope = ['https://spreadsheets.google.com/feeds',
                       'https://www.googleapis.com/auth/drive']
 
-        self.credentials = ServiceAccountCredentials.from_json_keyfile_name('Emotions Project-481579272f6a.json',
+        self.credentials = ServiceAccountCredentials.from_json_keyfile_name(secrets.credentials_file,
                                                                             self.scope)
         self.client = gs.authorize(self.credentials)
         # self.sheet_name = name
         self.email_to_share = email_to_share
         self.sheet_shared = False
-        self.nvr_key = {"key": "99a1dfb5342546319e3d5f4de7150f05"}
-        self.nvr_url = 'https://nvr.miem.hse.ru/api/gdrive-upload/504'
+        self.nvr_key = {"key": secrets.server_key}
+        self.nvr_url = secrets.server_url
 
     # def write_data(self,  vector, timestamp):
     #     try:
@@ -76,6 +77,10 @@ class API:
     #     return row, column
 
     def write_table(self, filename, table):
+        """writes data into sheet via its name. if sheet with that name does not exist, func will create new one
+        WARNING!!! If no email-to-share is not given, sheet will be barely reachable
+        filename - string, name of the sheet how it will be displayed on google disk
+        table - list of lists, data to be inserted"""
         try:
             sheet = self.client.open(filename)
         except gs.exceptions.SpreadsheetNotFound:
@@ -96,13 +101,15 @@ class API:
                     cell_list[i*8 + j].value = table[i][j]
             sheet.update_cells(cell_list)
     def send_to_nvr(self, filename):
+        """"function to send to miem nvr
+        filename - string, mp4 video with result"""
         file = open(filename, 'rb')
         files = {'file': file}
         res = requests.post(self.nvr_url, files=files, headers=self.nvr_key)
         return res.status_code
 
 class Classifier(nn.Module):
-
+    """ class for classifier based on pytorch """
     def __init__(self):
         super(Classifier, self).__init__()
         # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -124,7 +131,23 @@ class Classifier(nn.Module):
 
 
 class Emanalisis():
-
+    """ main class for usage in emotion recognition
+    input mode - int, determines where class takes its data.
+        0 - from default webcam of device
+        1 - from ip camera
+        2 - from video
+    output mode - int, determines how output would look.
+        0 - classical opencv display, augments original video
+        1 - makes separate graph of emotions count with matplotlib. if record_video is True, will record only graph
+        2 - graph on black background with all info. Needed for nvr
+    record_video - bool, if True, will record output on mp4.
+    email_to_share - list of strings/string, email(s) to share sheet. If there is none, sheets will be barely reachable
+    channel - int/string, sourse for input data. If input_mode is 0, it should be 0, if input_mode is 1, it'd be ip
+        address of camera, else it is name of mp4 video file
+    on_gpu - bool, if true, will use gpu for detection and classification. NEVER USE IF THERE IS NO GPU DEVICE.
+    display - bool, if true, will show output on screen.
+    only_headcount - bool, if true, will disable classification and graph drawing
+    send_to_nvr - bool, if true, will send recorded video into miem nvr"""
     def __init__(self, input_mode = 0, output_mode = 0, record_video = False,
                  email_to_share = None, channel = 0, on_gpu = False,
                  display = False, only_headcount = False, send_to_nvr = False):
@@ -135,7 +158,8 @@ class Emanalisis():
             self.save_into_sheet = False
         if self.save_into_sheet or self.send_to_nvr:
             self.api = API(email_to_share)
-        uri = 'rtsp://admin:Supervisor@{}:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif'
+        uri = 'rtsp://' + secrets.ip_camera_login + ':' + secrets.ip_camera_password + \
+              '@{}:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif'
         self.input_mode = input_mode
         self.output_mode = output_mode      # 0 - pretty display, 1 - separate graph, 2 - graph with black background
         self.record_video = record_video
@@ -187,7 +211,7 @@ class Emanalisis():
     # let those be, might be used for further improvements
 
     def load_model(self, model, pretrained_path, load_to_cpu):
-
+        """load model of RetinaFace for face detection"""
         def remove_prefix(state_dict, prefix):
             ''' Old style model is stored with all names of parameters sharing common prefix 'module.' '''
             print('remove prefix \'{}\''.format(prefix))
@@ -224,6 +248,9 @@ class Emanalisis():
         return model
 
     def load_video(self, video, num_fps):
+        """load video for analysis.
+        video - string, name of the file
+        num_fps - int/float, which fps output will be, mainly used for lowering amount of frames taken to analyse"""
         fps = 1 / num_fps
         cap = cv2.VideoCapture(video)
         # cap = cv2.VideoCapture(0)
@@ -242,6 +269,10 @@ class Emanalisis():
         return np.asarray(out_arr)
 
     def make_video(self, filename, frames, num_fps):
+        """function that creates new video file
+        filename - string, name of file WITHOUT '.mp4'
+        frames - list of lists, frames in BRG format
+        num_fps - int/float, fps of said video"""
         mode = ""
         if self.input_mode == 0:
             mode = "wc_"
@@ -267,6 +298,7 @@ class Emanalisis():
     resize = 1
 
     def prerun(self):
+        """sets parameters for RetinaFace, prerun() is used once while first usege of run()"""
         torch.set_grad_enabled(False)
         cfg = None
         if self.parser_args.network == "mobile0.25":
@@ -292,7 +324,11 @@ class Emanalisis():
     cfg = None
 
     def run(self, filename, fps_factor=1, stop_time=-1):
-
+        """main function that does all the work.
+        filename - string, name of video file and google sheet.
+        fps_factor - int, determines how often frame is taken from input. It takes every Nth frame from source
+        stop_time - int, timer until it stops recording. -1 is used to work indefinitely(or until Enter key is pressed)
+        """
         last_row = 1
         last_column = 1
 
@@ -476,76 +512,79 @@ class Emanalisis():
                             else:
                                 ntable = ntable * 300
                                 # nemotions_lapse = nemotions_lapse * 30
-                            scale = (display_img.shape[1] - 30) / (30*60*25/fps_factor)
+                            if stop_time == -1:
+                                scale = (display_img.shape[1] - 30) / (30*60*25/fps_factor)
+                            else:
+                                scale = (display_img.shape[1] - 30) / (stop_time/fps_factor)
                             x = x * scale + 15
 
 
                             shift = display_img.shape[0] / 2 - 10
-                            # angry_scores = shift + nemotions_lapse[:, 0]
-                            # disgust_scores = shift + nemotions_lapse[:, 1]
-                            # fear_scores = shift + nemotions_lapse[:, 2]
-                            # happy_scores = shift - nemotions_lapse[:, 3]
-                            # sad_scores = shift + nemotions_lapse[:, 4]
-                            # surprise_scores = shift - nemotions_lapse[:, 5]
-                            # neutral_scores = shift - nemotions_lapse[:, 6]
+                            angry_scores = shift + nemotions_lapse[:, 0]
+                            disgust_scores = shift + nemotions_lapse[:, 1]
+                            fear_scores = shift + nemotions_lapse[:, 2]
+                            happy_scores = shift - nemotions_lapse[:, 3]
+                            sad_scores = shift + nemotions_lapse[:, 4]
+                            surprise_scores = shift - nemotions_lapse[:, 5]
+                            neutral_scores = shift - nemotions_lapse[:, 6]
 
-                            possitive_scores = shift - nemotions_lapse[:,3] - nemotions_lapse[:,5] - \
-                                               nemotions_lapse[:,6]
-                            negative_scores = shift + nemotions_lapse[:, 0] + nemotions_lapse[:, 1] + \
-                                              nemotions_lapse[:, 2] + nemotions_lapse[:, 4]
-                            possitive_sum = unchanged_happy_scores + unchanged_surprise_scores + \
-                                            unchanged_neutral_scores
-                            negative_sum = unchanged_angry_scores + unchanged_disgust_scores + unchanged_fear_scores \
-                                           + unchanged_sad_scores
+                            # possitive_scores = shift - nemotions_lapse[:,3] - nemotions_lapse[:,5] - \
+                            #                    nemotions_lapse[:,6]
+                            # negative_scores = shift + nemotions_lapse[:, 0] + nemotions_lapse[:, 1] + \
+                            #                   nemotions_lapse[:, 2] + nemotions_lapse[:, 4]
+                            # possitive_sum = unchanged_happy_scores + unchanged_surprise_scores + \
+                            #                 unchanged_neutral_scores
+                            # negative_sum = unchanged_angry_scores + unchanged_disgust_scores + unchanged_fear_scores \
+                            #                + unchanged_sad_scores
 
-                            plot = np.vstack((x, possitive_scores)).astype(np.int32).T
+                            plot = np.vstack((x, angry_scores)).astype(np.int32).T
                             cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 0, 255))
                             cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
                             cv2.putText(display_img,
-                                        "possitive " + str(int(np.flip(possitive_sum)[0])),
+                                        "possitive " + str(int(np.flip(unchanged_angry_scores)[0])),
                                         cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1 )
 
-                            plot = np.vstack((x, negative_scores)).astype(np.int32).T
+                            plot = np.vstack((x, disgust_scores)).astype(np.int32).T
                             cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 0))
                             cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
                             cv2.putText(display_img,
-                                        "negative " + str(int(np.flip(negative_sum)[0]))
+                                        "negative " + str(int(np.flip(unchanged_disgust_scores)[0]))
                                         , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0),1)
 
-                            # plot = np.vstack((x, fear_scores)).astype(np.int32).T
-                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(255, 255, 255))
-                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            # cv2.putText(display_img,
-                            #             self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
-                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255),1)
-                            #
-                            # plot = np.vstack((x, happy_scores)).astype(np.int32).T
-                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 255))
-                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            # cv2.putText(display_img,
-                            #             self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
-                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255),1)
-                            #
-                            # plot = np.vstack((x, sad_scores)).astype(np.int32).T
-                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 153, 255))
-                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            # cv2.putText(display_img,
-                            #             self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
-                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255),1)
-                            #
-                            # plot = np.vstack((x, surprise_scores)).astype(np.int32).T
-                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 0, 76))
-                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            # cv2.putText(display_img,
-                            #             self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
-                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76),1)
-                            #
-                            # plot = np.vstack((x, neutral_scores)).astype(np.int32).T
-                            # cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(96, 96, 96))
-                            # cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            # cv2.putText(display_img,
-                            #             self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
-                            #             , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96),1)
+                            plot = np.vstack((x, fear_scores)).astype(np.int32).T
+                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(255, 255, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(display_img,
+                                        self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
+                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255),1)
+
+                            plot = np.vstack((x, happy_scores)).astype(np.int32).T
+                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(display_img,
+                                        self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
+                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255),1)
+
+                            plot = np.vstack((x, sad_scores)).astype(np.int32).T
+                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 153, 255))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(display_img,
+                                        self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
+                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255),1)
+
+                            plot = np.vstack((x, surprise_scores)).astype(np.int32).T
+                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 0, 76))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(display_img,
+                                        self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
+                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76),1)
+
+                            plot = np.vstack((x, neutral_scores)).astype(np.int32).T
+                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(96, 96, 96))
+                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                            cv2.putText(display_img,
+                                        self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
+                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96),1)
 
 
                     cv2.putText(display_img, "Head count: " + str(head_count),
