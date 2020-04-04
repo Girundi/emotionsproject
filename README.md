@@ -19,6 +19,7 @@
 * [Ссылки](#Ссылки)
 
 ## Режимы работы
+
 ### Режимы получения видео потока
 
 Объект класса Emanalysis имеет 3 режима получения видеопотока:
@@ -35,6 +36,7 @@ analysator = Emanalysis(input_mode=1, channel='172.223.45.67')
 ```python
 analysator = Emanalysis(input_mode=2, channel='video_file_name.mp4')
 ```
+
 ### Режимы вывода данных
 
 Для того, чтобы получение обработанного видеопотока было в силе, необходимо передать в параметр record_video значение True.
@@ -51,6 +53,7 @@ analysator = Emanalysis(output_mode=1, record_video=True)
 ```python
 analysator = Emanalysis(output_mode=2, record_video=True)
 ```
+
 ### Таблицы
 
 При помощи библиотеки gspread, можно записывать сырые данные об эмоциях от нейронной сети. Но необходим аккаунт gmail для получения к ним доступа.
@@ -60,6 +63,7 @@ analysator = Emanalysis(email_to_share=['mailbox@gmail.com', 'anothermailbox@gma
 ```
 
 ### Дополнительные режимы
+
 ```python
 analysator = Emanalysis(only_headcount=True, on_gpu=True, send_to_nvr=True, display=True)
 ```
@@ -100,6 +104,7 @@ fps_factor -- параметр, указывающий какой Н-ый кад
 ## Использование
 
 ### Запуск программы
+
 Программа запускается из файла main.py.
 ```python
 from core import Emanalisis
