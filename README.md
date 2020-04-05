@@ -22,19 +22,19 @@
 
 ### Режимы получения видео потока
 
-Объект класса Emanalysis имеет 3 режима получения видеопотока:
+Объект класса Emanalisis имеет 3 режима получения видеопотока:
 
 1) Использование стандартной вебкамеры на устройстве, на котором запущена программа. Если устройство не имеет таковых, будет вызвана ошибка
 ```python
-analysator = Emanalysis(input_mode=0)
+analysator = Emanalisis(input_mode=0)
 ```
 2) Использование потока с ip-камеры, адрес который указан в параметре channel. Перед использованием, необходимо удостовериться, что устройство, на котором запущена программа, и камера находятся в одной сети. 
 ```python
-analysator = Emanalysis(input_mode=1, channel='172.223.45.67')
+analysator = Emanalisis(input_mode=1, channel='172.223.45.67')
 ```
 3) Анализ с видеое. В этом режиме в параметре channel указывается имя видеофайла, предпочтительно MP4.
 ```python
-analysator = Emanalysis(input_mode=2, channel='video_file_name.mp4')
+analysator = Emanalisis(input_mode=2, channel='video_file_name.mp4')
 ```
 
 ### Режимы вывода данных
@@ -43,23 +43,28 @@ analysator = Emanalysis(input_mode=2, channel='video_file_name.mp4')
 3 режима передачи видеопотока:
 1) Аугментированный поток. Лица выделены прямоугольниками, эмоции подписаны, внизу находится график подсчёта эмоций, вверху указан подсчёт числа распознаных людей(head_count) и коэффициента вовлеченности (attension_coef).
 ```python
-analysator = Emanalysis(output_mode=0, record_video=True)
+analysator = Emanalisis(output_mode=0, record_video=True)
 ```
+![Режим аугментированного видеопотока](images_for_docs/myimage.jpg)
+
 2) Отдельный график подсчёта числа эмоций, выполненный на matplotlib.
 ```python
-analysator = Emanalysis(output_mode=1, record_video=True)
+analysator = Emanalisis(output_mode=1, record_video=True)
 ```
+![Режим отдельного графика](images_for_docs/myimage1.jpg)
+
 3) Граф на тёмном фоне, с подсчётом head_count, attension_coef.
 ```python
-analysator = Emanalysis(output_mode=2, record_video=True)
+analysator = Emanalisis(output_mode=2, record_video=True)
 ```
+![Режим графа на чёрном фоне](images_for_docs/myimage2.jpg)
 
 ### Таблицы
 
 При помощи библиотеки gspread, можно записывать сырые данные об эмоциях от нейронной сети. Но необходим аккаунт gmail для получения к ним доступа.
 ```python
-analysator = Emanalysis(email_to_share='google@gmail.com')
-analysator = Emanalysis(email_to_share=['mailbox@gmail.com', 'anothermailbox@gmail.com'])
+analysator = Emanalisis(email_to_share='google@gmail.com')
+analysator = Emanalisis(email_to_share=['mailbox@gmail.com', 'anothermailbox@gmail.com'])
 ```
 
 ### Дополнительные режимы
@@ -69,11 +74,19 @@ analysator = Emanalysis(only_headcount=True, on_gpu=True, send_to_nvr=True, disp
 ```
 only_headcount -- если равно True, уберает классификацию эмоций и оставляет только подсчёт числа людей
 
-on_gpu -- если равно True, использует ускорение вычисленние на GPU. **!!!Не использовать на устройсвах без GPU!!!** 
+on_gpu -- если равно True, использует ускорение вычисленние на GPU. **!!!Не использовать на устройсвах без Nvidia GPU!!!** 
 
 send_to_nvr -- если равно True, по завершении отправляет на сторонний сервис по ключу и URL, указанных в файле secrets.py
 
 display -- если равно True, при вополнении открывает окно, где в реальном времени отображается выходной видео поток(даже если он не записывается). **!!!Не использовать при использовании на сервере!!!**
+
+### Коэффициент вовлеченности
+
+Коэффициент вовлеченности представляет собой отношение числа людей с самой частовстречающейся эмоцией к общему числу людей на данный момент. Предположение состоит в том, что чем большее число людей испытывает одну эмоцию, тем большее людей реагирует на один раздражитель, а значит вовлечены в учебный процесс. 
+
+![Коэффициент вовлеченности](images_for_docs/CodeCogsEqn.gif)
+
+В силу неточности классифицирующей сети и отсутствия учёта числа эмоций других, чем самая часто встречающаяся, делает коэффициент весьма ненадёжным, но предоставляет сколько-нибудь объективный метод оценки вовлеченности. Дальнейшая доработка метода или совмещение с другими показателями может улучшить точность оценки.
 
 ## Установка
 
@@ -95,7 +108,7 @@ a = Emanalysis()
 a.run(filename=filename, stop_time=2120, fps_factor=25)
 ```
 
-filename -- обязательный параметр, по имени которого даётся название таблицы и имя, сохраняемого видео.
+filename -- обязательный параметр, по имени которого даётся название таблицы и имя сохраняемого видео.
 
 stop_time -- параметр, указывающий, когда в секундах должно остановиться выполнение функции run().
 
