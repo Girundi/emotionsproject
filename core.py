@@ -18,6 +18,8 @@ import gspread as gs
 from oauth2client.service_account import ServiceAccountCredentials
 import matplotlib.pyplot as plt
 import multiprocessing as mp
+from multiprocessing.pool import ThreadPool as Pool
+# from pathos.multiprocessing import ProcessingPool as Pool
 import requests
 import platform
 import secrets
@@ -37,44 +39,6 @@ class API:
         self.sheet_shared = False
         self.nvr_key = {"key": secrets.server_key}
         self.nvr_url = secrets.server_url
-
-    # def write_data(self,  vector, timestamp):
-    #     try:
-    #         sheet = self.client.open(self.sheet_name)
-    #     except gs.exceptions.SpreadsheetNotFound:
-    #         sheet = self.client.create(self.sheet_name)
-    #         if isinstance(self.email_to_share, list):
-    #             for email in self.email_to_share:
-    #                 sheet.share(email, perm_type='user', role='writer')
-    #         else:
-    #             sheet.share(self.email_to_share, perm_type='user', role='write')
-    #
-    #     row = 1
-    #     column = 1
-    #     sheet = sheet.sheet1
-    #     value = sheet.cell(row, column).value
-    #     if value != "":
-    #         while value != "":
-    #             row += 1
-    #             value = sheet.cell(row, column).value
-    #
-    #     if value == "":
-    #         sheet.update_cell(row, column, timestamp)
-    #
-    #         # def update_vector(row, column, vector, sheet):
-    #         #     for em in vector:
-    #         #         column += 1
-    #         #         sheet.update_cell(row, column, str(em))
-    #
-    #         # pool = mp.Pool(mp.cpu_count())
-    #         for em in vector:
-    #             column += 1
-    #             sheet.update_cell(row, column, str(em))
-    #
-    #         row += 1
-    #         column = 1
-    #
-    #     return row, column
 
     def write_table(self, filename, table):
         """writes data into sheet via its name. if sheet with that name does not exist, func will create new one
@@ -106,6 +70,7 @@ class API:
         file = open(filename, 'rb')
         files = {'file': file}
         res = requests.post(self.nvr_url, files=files, headers=self.nvr_key)
+        os.remove(filename)
         return res.status_code
 
 class Classifier(nn.Module):
@@ -129,6 +94,8 @@ class Classifier(nn.Module):
         x = self.fc3(x)
         return x
 
+def analyse(obj, img_raw):
+    return obj.analyse(img_raw)
 
 class Emanalisis():
     """ main class for usage in emotion recognition
@@ -150,7 +117,7 @@ class Emanalisis():
     send_to_nvr - bool, if true, will send recorded video into miem nvr"""
     def __init__(self, input_mode = 0, output_mode = 0, record_video = False,
                  email_to_share = None, channel = 0, on_gpu = False,
-                 display = False, only_headcount = False, send_to_nvr = False):
+                 display = False, only_headcount = False, send_to_nvr = False, parallel=False):
         self.save_into_sheet = True
         self.on_gpu = on_gpu
         self.send_to_nvr = send_to_nvr
@@ -172,8 +139,10 @@ class Emanalisis():
             self.ip = channel
         elif input_mode == 2:         # video
             self.channel = channel
-
-
+        if parallel and not on_gpu:
+            self.parallel = True
+        else:
+            self.parallel = False
 
 
         # from classifier by Sizykh Ivan
@@ -207,6 +176,34 @@ class Emanalisis():
         self.parser.add_argument('-v', '--video', default='vid.mp4', type=str)
 
         self.parser_args = self.parser.parse_args()
+
+        self.resize = 1
+
+        """sets parameters for RetinaFace, prerun() is used once while first usege of run()"""
+        torch.set_grad_enabled(False)
+        cfg = None
+        if self.parser_args.network == "mobile0.25":
+            cfg = cfg_mnet
+        elif self.parser_args.network == "resnet50":
+            cfg = cfg_re50
+        # net and model
+        detector = RetinaFace(cfg=cfg, phase='test')
+        detector = self.load_model(model=detector, pretrained_path=self.parser_args.trained_model,
+                                   load_to_cpu=self.parser_args.cpu)
+        detector.eval()
+        print('Finished loading model!')
+        print(detector)
+
+        if self.on_gpu:
+            cudnn.benchmark = True
+            self.detector = detector.to(self.device)
+        else:
+            self.detector = detector
+        self.cfg = cfg
+
+
+
+
 
     # let those be, might be used for further improvements
 
@@ -281,7 +278,7 @@ class Emanalisis():
         elif self.input_mode == 2:
             mode = str(self.channel) # datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 
-        string = './' + filename + '.mp4'
+        string = filename + '.mp4'
 
         writer = cv2.VideoWriter(
                 string,
@@ -292,36 +289,325 @@ class Emanalisis():
             writer.write(frame)
         writer.release()
         cv2.destroyAllWindows()
+        if platform.system() != "Windows":
+            d = datetime.datetime.strptime(filename, "%Y-%m-%d_%H-%M")
+            new_string = d.strftime("%Y-%m-%d_%H:%M") + ".mp4"
+            os.rename(string, new_string)
+            return new_string
         return string
 
-    # to run
-    resize = 1
+    def detect_faces(self, img_raw):
+        img = np.float32(img_raw)
 
-    def prerun(self):
-        """sets parameters for RetinaFace, prerun() is used once while first usege of run()"""
-        torch.set_grad_enabled(False)
-        cfg = None
-        if self.parser_args.network == "mobile0.25":
-            cfg = cfg_mnet
-        elif self.parser_args.network == "resnet50":
-            cfg = cfg_re50
-        # net and model
-        detector = RetinaFace(cfg=cfg, phase='test')
-        detector = self.load_model(model=detector, pretrained_path=self.parser_args.trained_model,
-                                   load_to_cpu=self.parser_args.cpu)
-        detector.eval()
-        print('Finished loading model!')
-        print(detector)
-
+        im_height, im_width, _ = img.shape
+        scale = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
+        img -= (104, 117, 123)
+        img = img.transpose(2, 0, 1)
+        img = torch.from_numpy(img).unsqueeze(0)
         if self.on_gpu:
-            cudnn.benchmark = True
-            self.detector = detector.to(self.device)
-        else:
-            self.detector = detector
-        self.cfg = cfg
+            img = img.to(self.device)
+            scale = scale.to(self.device)
+        # graph = 0
+        tic = time.time()
+        loc, conf, landms = self.detector(img)  # forward pass
+        print('net forward time: {:.4f}'.format(time.time() - tic))
 
-    detector = None
-    cfg = None
+        priorbox = PriorBox(self.cfg, image_size=(im_height, im_width))
+        priors = priorbox.forward()
+        if self.on_gpu:
+            priors = priors.to(self.device)
+        prior_data = priors.data
+        boxes = decode(loc.data.squeeze(0), prior_data, self.cfg['variance'])
+        boxes = boxes * scale / self.resize
+        boxes = boxes.cpu().numpy()
+        scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
+        landms = decode_landm(landms.data.squeeze(0), prior_data, self.cfg['variance'])
+        scale1 = torch.Tensor([img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+                               img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+                               img.shape[3], img.shape[2]])
+        if self.on_gpu:
+            scale1 = scale1.to(self.device)
+        landms = landms * scale1 / self.resize
+        landms = landms.cpu().numpy()
+
+        # ignore low scores
+        inds = np.where(scores > self.parser_args.confidence_threshold)[0]
+        boxes = boxes[inds]
+        landms = landms[inds]
+        scores = scores[inds]
+
+        # keep top-K before NMS
+        order = scores.argsort()[::-1][:self.parser_args.top_k]
+        boxes = boxes[order]
+        landms = landms[order]
+        scores = scores[order]
+
+        # do NMS
+        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
+        keep = py_cpu_nms(dets, self.parser_args.nms_threshold)
+        dets = dets[keep, :]
+        landms = landms[keep]
+
+        # keep top-K faster NMS
+        dets = dets[:self.parser_args.keep_top_k, :]
+        landms = landms[:self.parser_args.keep_top_k, :]
+
+        dets = np.concatenate((dets, landms), axis=1)
+
+        return dets
+
+    def classify_face(self, crop_img):
+
+        dim = (48, 48)
+        resized = cv2.resize(crop_img, dim)
+        gray_res = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+        roi = gray_res
+        roi = np.array(roi)
+        roi = 2 * (roi.astype("float") / 255.0) - 1
+
+        roi = np.expand_dims(roi, axis=2)
+        roi = np.expand_dims(roi, axis=0)
+        roi = np.expand_dims(roi, axis=0)
+        roi = torch.from_numpy(roi)
+        roi = roi.float()
+        roi = roi.squeeze(dim=4)
+        # make a prediction on the ROI, then lookup the class
+        tic = time.time()
+        if self.on_gpu:
+            preds = self.classifier(roi.to(self.device))[0]
+        else:
+            preds = self.classifier(roi)[0]
+        print(str(time.time() - tic) + " to classify")
+        return preds
+
+
+    def analyse(self, img_raw):
+
+        dets = self.detect_faces(img_raw)
+
+        display_img = np.copy(img_raw)
+        head_count = 0
+        emotions_count = np.zeros(7)
+        local_table = []
+        labels = []
+        # show image
+        for b in dets:
+            if b[4] < self.parser_args.vis_thres:
+                continue
+            text = "{:.4f}".format(b[4])
+            b = list(map(int, b))
+            crop_img = img_raw[b[1]:b[3], b[0]:b[2]]
+
+            if crop_img.sum() != 0:
+                head_count = head_count + 1
+                if not self.only_headcount:
+                    preds = self.classify_face(crop_img)
+
+                    label = self.class_labels[preds.argmax()]
+
+                    emotions_count[preds.argmax()] += 1
+
+                    preds = preds.tolist()
+                    emotions_count = emotions_count
+                    labels.append(label)
+                    local_table.append(preds)
+
+        return dets[:4], local_table, labels, head_count, emotions_count
+
+
+
+    def augment_frame(self, array):
+
+        if len(array) == 13:
+            img_raw, dets,  local_table, labels, emotions_count, head_count, table, i, \
+            emotions_lapse, stop_time, fps_factor, figure, graphes                       = array
+        else:
+            img_raw, dets,  local_table, labels, emotions_count, head_count, table, i, \
+            emotions_lapse, stop_time, fps_factor                                        = array
+
+        # dets = self.detect_faces(img_raw)
+
+        display_img = np.copy(img_raw)
+        # head_count = 0
+        # emotions_count = np.zeros(7)
+
+        # show image
+        for j in range(len(local_table)):
+            # if b[4] < self.parser_args.vis_thres:
+            #     continue
+            # text = "{:.4f}".format(b[4])
+            # b = list(map(int, b))
+            # crop_img = img_raw[b[1]:b[3], b[0]:b[2]]
+            # dim = (48, 48)
+            # if crop_img.sum() != 0:
+                # head_count = head_count + 1
+            if not self.only_headcount:
+                # preds = self.classify_face(crop_img, dim)
+
+                label = labels[j]
+                b = list(map(int, dets[j]))
+                # preds = local_table[j]
+                # i is timestamp for temporal
+
+                # table.append([i, preds[0], preds[1], preds[2], preds[3], preds[4], preds[5], preds[6]])
+            if self.output_mode != 2:
+                cv2.rectangle(display_img, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
+                cx = b[0]
+                cy = b[1] + 12
+                if not self.only_headcount:
+                    cv2.putText(display_img, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+        if self.output_mode == 2:
+            display_img = np.zeros_like(img_raw)
+            display_img = np.resize(display_img, (400, 1920, 3))
+        # emotions_lapse.append(emotions_count.tolist())
+        if not self.only_headcount:
+            ntable = np.asarray(table)
+            shift = 0
+            nemotions_lapse = np.asarray(emotions_lapse) * display_img.shape[0] / (2 * head_count)
+            x = range(1, len(emotions_lapse) + 1)
+            x = np.asarray(x)
+
+            def softmax(x):
+                return np.exp(x) / sum(np.exp(x))
+
+            ntable = softmax(ntable)
+            unchanged_angry_scores = np.asarray(emotions_lapse)[:, 0]
+            unchanged_disgust_scores = np.asarray(emotions_lapse)[:, 1]
+            unchanged_fear_scores = np.asarray(emotions_lapse)[:, 2]
+            unchanged_happy_scores = np.asarray(emotions_lapse)[:, 3]
+            unchanged_sad_scores = np.asarray(emotions_lapse)[:, 4]
+            unchanged_surprise_scores = np.asarray(emotions_lapse)[:, 5]
+            unchanged_neutral_scores = np.asarray(emotions_lapse)[:, 6]
+
+            # attention_coef = np.max(np.max(np.flip(emotions_lapse)[0,:],axis=0)) / head_count
+            attention_coef = (np.max(emotions_count)) / head_count
+            # attention_coef = np.mean(emotions_count) / np.max(emotions_count)
+
+        if self.output_mode == 0 or self.output_mode == 2:
+            if not self.only_headcount:
+                if self.output_mode == 0:
+                    ntable = ntable * 50
+                    # nemotions_lapse = nemotions_lapse * 5
+                else:
+                    ntable = ntable * 300
+                    # nemotions_lapse = nemotions_lapse * 30
+                if stop_time == -1:
+                    scale = (display_img.shape[1] - 30) / (30 * 60 * 25 / fps_factor)
+                else:
+                    scale = (display_img.shape[1] - 30) / (stop_time * 25 / fps_factor)
+                x = x * scale + 15
+
+                shift = display_img.shape[0] / 2 - 10
+                angry_scores = shift + nemotions_lapse[:, 0]
+                disgust_scores = shift + nemotions_lapse[:, 1]
+                fear_scores = shift + nemotions_lapse[:, 2]
+                happy_scores = shift - nemotions_lapse[:, 3]
+                sad_scores = shift + nemotions_lapse[:, 4]
+                surprise_scores = shift - nemotions_lapse[:, 5]
+                neutral_scores = shift - nemotions_lapse[:, 6]
+
+                # possitive_scores = shift - nemotions_lapse[:,3] - nemotions_lapse[:,5] - \
+                #                    nemotions_lapse[:,6]
+                # negative_scores = shift + nemotions_lapse[:, 0] + nemotions_lapse[:, 1] + \
+                #                   nemotions_lapse[:, 2] + nemotions_lapse[:, 4]
+                # possitive_sum = unchanged_happy_scores + unchanged_surprise_scores + \
+                #                 unchanged_neutral_scores
+                # negative_sum = unchanged_angry_scores + unchanged_disgust_scores + unchanged_fear_scores \
+                #                + unchanged_sad_scores
+
+                plot = np.vstack((x, angry_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(0, 0, 255))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[0] + " " + str(int(np.flip(unchanged_angry_scores)[0])),
+                            cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1)
+
+                plot = np.vstack((x, disgust_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(0, 255, 0))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[1] + " " + str(int(np.flip(unchanged_disgust_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+
+                plot = np.vstack((x, fear_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(255, 255, 255))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+                plot = np.vstack((x, happy_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(0, 255, 255))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+
+                plot = np.vstack((x, sad_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(153, 153, 255))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255), 1)
+
+                plot = np.vstack((x, surprise_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(153, 0, 76))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76), 1)
+
+                plot = np.vstack((x, neutral_scores)).astype(np.int32).T
+                cv2.polylines(display_img, [plot], isClosed=False, thickness=2, color=(96, 96, 96))
+                cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
+                cv2.putText(display_img,
+                            self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
+                            , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96), 1)
+
+        cv2.putText(display_img, "Head count: " + str(head_count),
+                    (5, 30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60, 20, 220))
+        cv2.putText(display_img, "Attention coef: " + str(round(attention_coef, 2)),
+                    (285, 30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60, 20, 220))
+
+        # plot = np.vstack((x, table))
+
+        # dots on facial features
+
+        # cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
+        # cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
+        # cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
+        # cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
+        # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
+        if self.output_mode == 1:
+            graphes[0].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[0].set_ydata(unchanged_angry_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[1].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[1].set_ydata(unchanged_disgust_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[2].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[2].set_ydata(unchanged_fear_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[3].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[3].set_ydata(unchanged_happy_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[4].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[4].set_ydata(unchanged_sad_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[5].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[5].set_ydata(unchanged_surprise_scores[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[6].set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
+            graphes[6].set_ydata(unchanged_neutral_scores[x.shape[0] - 100:x.shape[0] - 1])
+
+            figure.canvas.draw()
+            figure.canvas.flush_events()
+            axa = plt.gca()
+            axa.relim()
+            axa.autoscale_view(True, True, True)
+            if self.record_video:
+                figure.tight_layout(pad=0)
+                axa.margins(0)
+                plot = np.frombuffer(figure.canvas.tostring_rgb(), dtype=np.uint8)
+                plot = plot.reshape(figure.canvas.get_width_height()[::-1] + (3,))
+                return plot
+
+        return display_img
 
     def run(self, filename, fps_factor=1, stop_time=-1):
         """main function that does all the work.
@@ -329,25 +615,15 @@ class Emanalisis():
         fps_factor - int, determines how often frame is taken from input. It takes every Nth frame from source
         stop_time - int, timer until it stops recording. -1 is used to work indefinitely(or until Enter key is pressed)
         """
-        last_row = 1
-        last_column = 1
 
         # to load RetinaFace model
-        if self.detector is None or self.cfg is None:
-            self.prerun()
+        # if self.detector is None or self.cfg is None:
+        #     self.prerun()
         table = []
         if self.record_video:
             frames = []
         cap = cv2.VideoCapture(self.channel)#self.uri.format(ip))
         i = 0
-        x = []
-        angry_scores = []
-        disgust_scores = []
-        fear_scores = []
-        happy_scores = []
-        sad_scores = []
-        surprise_scores = []
-        neutral_scores = []
         emotions_lapse = []
 
         start_time = time.time()
@@ -364,303 +640,103 @@ class Emanalisis():
             surprise_graph, = ax.plot(0,0,'m-', label=self.class_labels[5])
             neutral_graph, = ax.plot(0,0,'b-', label=self.class_labels[6])
             ax.legend()
+            graphes = [angry_graph, disgust_graph, fear_graph, happy_graph, sad_graph, surprise_graph, neutral_graph]
 
-        while True:
-
-            ret, img_raw = cap.read()
-            try:
+        if not self.parallel:
+            while True:
+                ret, img_raw = cap.read()
+                # try:
                 if i % fps_factor == 0:
-                    img = np.float32(img_raw)
 
-                    im_height, im_width, _ = img.shape
-                    scale = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
-                    img -= (104, 117, 123)
-                    img = img.transpose(2, 0, 1)
-                    img = torch.from_numpy(img).unsqueeze(0)
-                    if self.on_gpu:
-                        img = img.to(self.device)
-                        scale = scale.to(self.device)
-                    # graph = 0
-                    tic = time.time()
-                    loc, conf, landms = self.detector(img)  # forward pass
-                    print('net forward time: {:.4f}'.format(time.time() - tic))
+                    dets, local_table, labels, head_count, emotions_count = self.analyse(img_raw)
 
-                    priorbox = PriorBox(self.cfg, image_size=(im_height, im_width))
-                    priors = priorbox.forward()
-                    if self.on_gpu:
-                        priors = priors.to(self.device)
-                    prior_data = priors.data
-                    boxes = decode(loc.data.squeeze(0), prior_data, self.cfg['variance'])
-                    boxes = boxes * scale / self.resize
-                    boxes = boxes.cpu().numpy()
-                    scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
-                    landms = decode_landm(landms.data.squeeze(0), prior_data, self.cfg['variance'])
-                    scale1 = torch.Tensor([img.shape[3], img.shape[2], img.shape[3], img.shape[2],
-                                           img.shape[3], img.shape[2], img.shape[3], img.shape[2],
-                                           img.shape[3], img.shape[2]])
-                    if self.on_gpu:
-                        scale1 = scale1.to(self.device)
-                    landms = landms * scale1 / self.resize
-                    landms = landms.cpu().numpy()
+                    emotions_lapse.append(emotions_count)
 
-                    # ignore low scores
-                    inds = np.where(scores > self.parser_args.confidence_threshold)[0]
-                    boxes = boxes[inds]
-                    landms = landms[inds]
-                    scores = scores[inds]
+                    for pred in local_table:
+                        table.append([i, pred[0], pred[1], pred[2], pred[3], pred[4], pred[5], pred[6]])
 
-                    # keep top-K before NMS
-                    order = scores.argsort()[::-1][:self.parser_args.top_k]
-                    boxes = boxes[order]
-                    landms = landms[order]
-                    scores = scores[order]
-
-                    # do NMS
-                    dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
-                    keep = py_cpu_nms(dets, self.parser_args.nms_threshold)
-                    dets = dets[keep, :]
-                    landms = landms[keep]
-
-                    # keep top-K faster NMS
-                    dets = dets[:self.parser_args.keep_top_k, :]
-                    landms = landms[:self.parser_args.keep_top_k, :]
-
-                    dets = np.concatenate((dets, landms), axis=1)
-
-                    display_img = np.copy(img_raw)
-                    head_count = 0
-                    emotions_count = np.zeros(7)
-
-                    # show image
-                    for b in dets:
-                        if b[4] < self.parser_args.vis_thres:
-                            continue
-                        text = "{:.4f}".format(b[4])
-                        b = list(map(int, b))
-                        crop_img = img_raw[b[1]:b[3], b[0]:b[2]]
-                        dim = (48, 48)
-                        if crop_img.sum() != 0:
-                            head_count = head_count + 1
-                            if not self.only_headcount:
-
-                                resized = cv2.resize(crop_img, dim)
-                                gray_res = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-
-                                ### from webcam
-                                roi = gray_res
-                                roi = np.array(roi)
-                                roi = 2 * (roi.astype("float") / 255.0) - 1
-
-                                roi = np.expand_dims(roi, axis=2)
-                                roi = np.expand_dims(roi, axis=0)
-                                roi = np.expand_dims(roi, axis=0)
-                                roi = torch.from_numpy(roi)
-                                roi = roi.float()
-                                roi = roi.squeeze(dim=4)
-                                # make a prediction on the ROI, then lookup the class
-                                tic = time.time()
-                                if self.on_gpu:
-                                    preds = self.classifier(roi.to(self.device))[0]
-                                else:
-                                    preds = self.classifier(roi)[0]
-                                print(str(time.time() - tic) + " to classify")
-                                label = self.class_labels[preds.argmax()]
-
-                                emotions_count[preds.argmax()] += 1
-
-                                preds = preds.tolist()
-                                # i is timestamp for temporal
-
-                                table.append([i, preds[0], preds[1],preds[2], preds[3], preds[4], preds[5], preds[6]])
-                            if self.output_mode != 2:
-                                cv2.rectangle(display_img, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
-                                cx = b[0]
-                                cy = b[1] + 12
-                                if not self.only_headcount:
-                                    cv2.putText(display_img, label, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
-                    if self.output_mode == 2:
-                        display_img = np.zeros_like(img_raw)
-                        display_img = np.resize(display_img, (400, 1920, 3))
-                    emotions_lapse.append(emotions_count.tolist())
-                    if not self.only_headcount:
-                        ntable = np.asarray(table)
-                        shift = 0
-                        nemotions_lapse = np.asarray(emotions_lapse) * display_img.shape[0] / (2*head_count)
-                        x = range(1, len(emotions_lapse) + 1)
-                        x = np.asarray(x)
-
-                        def softmax(x):
-                            return np.exp(x) / sum(np.exp(x))
-                        ntable = softmax(ntable)
-                        unchanged_angry_scores = np.asarray(emotions_lapse)[:, 0]
-                        unchanged_disgust_scores = np.asarray(emotions_lapse)[:, 1]
-                        unchanged_fear_scores = np.asarray(emotions_lapse)[:, 2]
-                        unchanged_happy_scores = np.asarray(emotions_lapse)[:, 3]
-                        unchanged_sad_scores = np.asarray(emotions_lapse)[:, 4]
-                        unchanged_surprise_scores = np.asarray(emotions_lapse)[:, 5]
-                        unchanged_neutral_scores = np.asarray(emotions_lapse)[:, 6]
-
-                        # attention_coef = np.max(np.max(np.flip(emotions_lapse)[0,:],axis=0)) / head_count
-                        attention_coef = (np.max(emotions_count)) / head_count
-                        # attention_coef = np.mean(emotions_count) / np.max(emotions_count)
-
-                    if self.output_mode == 0 or self.output_mode == 2:
-                        if not self.only_headcount:
-                            if self.output_mode == 0:
-                                ntable = ntable * 50
-                                # nemotions_lapse = nemotions_lapse * 5
-                            else:
-                                ntable = ntable * 300
-                                # nemotions_lapse = nemotions_lapse * 30
-                            if stop_time == -1:
-                                scale = (display_img.shape[1] - 30) / (30*60*25/fps_factor)
-                            else:
-                                scale = (display_img.shape[1] - 30) / (stop_time/fps_factor)
-                            x = x * scale + 15
-
-
-                            shift = display_img.shape[0] / 2 - 10
-                            angry_scores = shift + nemotions_lapse[:, 0]
-                            disgust_scores = shift + nemotions_lapse[:, 1]
-                            fear_scores = shift + nemotions_lapse[:, 2]
-                            happy_scores = shift - nemotions_lapse[:, 3]
-                            sad_scores = shift + nemotions_lapse[:, 4]
-                            surprise_scores = shift - nemotions_lapse[:, 5]
-                            neutral_scores = shift - nemotions_lapse[:, 6]
-
-                            # possitive_scores = shift - nemotions_lapse[:,3] - nemotions_lapse[:,5] - \
-                            #                    nemotions_lapse[:,6]
-                            # negative_scores = shift + nemotions_lapse[:, 0] + nemotions_lapse[:, 1] + \
-                            #                   nemotions_lapse[:, 2] + nemotions_lapse[:, 4]
-                            # possitive_sum = unchanged_happy_scores + unchanged_surprise_scores + \
-                            #                 unchanged_neutral_scores
-                            # negative_sum = unchanged_angry_scores + unchanged_disgust_scores + unchanged_fear_scores \
-                            #                + unchanged_sad_scores
-
-                            plot = np.vstack((x, angry_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 0, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        "possitive " + str(int(np.flip(unchanged_angry_scores)[0])),
-                                        cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1 )
-
-                            plot = np.vstack((x, disgust_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 0))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        "negative " + str(int(np.flip(unchanged_disgust_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0),1)
-
-                            plot = np.vstack((x, fear_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(255, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[2] + " " + str(int(np.flip(unchanged_fear_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255),1)
-
-                            plot = np.vstack((x, happy_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(0, 255, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[3] + " " + str(int(np.flip(unchanged_happy_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255),1)
-
-                            plot = np.vstack((x, sad_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 153, 255))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[4] + " " + str(int(np.flip(unchanged_sad_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 153, 255),1)
-
-                            plot = np.vstack((x, surprise_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(153, 0, 76))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[5] + " " + str(int(np.flip(unchanged_surprise_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (153, 0, 76),1)
-
-                            plot = np.vstack((x, neutral_scores)).astype(np.int32).T
-                            cv2.polylines(display_img, [plot], isClosed=False,thickness=2, color=(96, 96, 96))
-                            cord = (plot[len(plot) - 1][0], plot[len(plot) - 1][1])
-                            cv2.putText(display_img,
-                                        self.class_labels[6] + " " + str(int(np.flip(unchanged_neutral_scores)[0]))
-                                        , cord, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (96, 96, 96),1)
-
-
-                    cv2.putText(display_img, "Head count: " + str(head_count),
-                                (5,30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60,20,220))
-                    cv2.putText(display_img, "Attention coef: " + str(round(attention_coef, 2)),
-                                (400, 30), cv2.FONT_HERSHEY_TRIPLEX, 1, (60, 20, 220))
-
-
-
-
-
-                            # plot = np.vstack((x, table))
-
-                            # dots on facial features
-
-                            # cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
-                            # cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
-                            # cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
-                            # cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
-                            # cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
-
-                    if self.record_video and self.output_mode != 1:
-                        frames.append(display_img)
-                    if display_img.shape[1] >= 1000:
-                        persent = 50
-                        width = int(display_img.shape[1] * persent / 100)
-                        height = int(display_img.shape[0] * persent / 100)
-                        new_shape = (width, height)
-                        display_img = cv2.resize(display_img, new_shape, interpolation=cv2.INTER_AREA)
-                    if self.display:
-                        cv2.imshow('Face Detector', display_img)
-
-                    if self.save_into_sheet and i % fps_factor == 0:
-                        self.api.write_table(filename, table)
 
                     if self.output_mode == 1:
-                        angry_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        angry_graph.set_ydata(unchanged_angry_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        disgust_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        disgust_graph.set_ydata(unchanged_disgust_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        fear_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        fear_graph.set_ydata(unchanged_fear_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        happy_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        happy_graph.set_ydata(unchanged_happy_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        sad_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        sad_graph.set_ydata(unchanged_sad_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        surprise_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        surprise_graph.set_ydata(unchanged_surprise_scores[x.shape[0] - 100:x.shape[0] - 1])
-                        neutral_graph.set_xdata(x[x.shape[0] - 100:x.shape[0] - 1])
-                        neutral_graph.set_ydata(unchanged_neutral_scores[x.shape[0] - 100:x.shape[0] - 1])
+                        frame = self.augment_frame([img_raw, dets, local_table, labels, emotions_count, head_count, table,
+                                                           i, emotions_lapse, stop_time, fps_factor, figure, graphes])
+                    else:
+                        frame = self.augment_frame([img_raw, dets, local_table, labels, emotions_count, head_count, table,
+                                                           i, emotions_lapse, stop_time, fps_factor])
 
+                    if self.record_video:
+                        frames.append(frame)
+                    if self.display:
+                        if frame.shape[1] >= 1000:
+                            percent = 50
+                            width = int(frame.shape[1] * percent / 100)
+                            height = int(frame.shape[0] * percent / 100)
+                            new_shape = (width, height)
+                            frame = cv2.resize(frame, new_shape, interpolation=cv2.INTER_AREA)
 
-                        figure.canvas.draw()
-                        figure.canvas.flush_events()
-                        axa = plt.gca()
-                        axa.relim()
-                        axa.autoscale_view(True, True, True)
-                        if self.record_video:
-                            figure.tight_layout(pad=0)
-                            axa.margins(0)
-                            plot = np.frombuffer(figure.canvas.tostring_rgb(), dtype=np.uint8)
-                            plot = plot.reshape(figure.canvas.get_width_height()[::-1] + (3, ))
-                            frames.append(plot)
+                        cv2.imshow('Face Detector', frame)
 
-            except:
-                cap = cv2.VideoCapture(self.channel)
-                continue
+                # except:
+                #     cap = cv2.VideoCapture(self.channel)
+                #     if time.time() - start_time >= stop_time:
+                #         break
+                #     continue
 
-            if cv2.waitKey(1) == 13 or time.time() - start_time >= stop_time:
-                break
-            i += 1
+                if cv2.waitKey(1) == 13 or time.time() - start_time >= stop_time:
+                    break
+                i += 1
+        else:
+            # pass
+            cpus = 2
+            while True:
+                pool = Pool(processes=cpus)
+                raw_images = []
+                j = 0
+                while j in range(cpus):
+                    if i % fps_factor:
+                        ret, img_raw = cap.read()
+                        raw_images.append(img_raw)
+                        j += 1
+                    i += 1
+
+                results = pool.map(self.analyse, raw_images)
+                for l in range(len(results)):
+                    dets, local_table, labels, head_count, emotions_count = results[l]
+                    img_raw = raw_images[l]
+                    emotions_lapse.append(emotions_count)
+
+                    for pred in local_table:
+                        table.append([i, pred[0], pred[1], pred[2], pred[3], pred[4], pred[5], pred[6]])
+
+                    if self.output_mode == 1:
+                        frame = self.augment_frame([img_raw, dets, local_table, labels, emotions_count, head_count, table,
+                                                           i - cpus + l, emotions_lapse, stop_time, fps_factor, figure, graphes])
+                    else:
+                        frame = self.augment_frame([img_raw, dets, local_table, labels, emotions_count, head_count, table,
+                                                           i - cpus + l, emotions_lapse, stop_time, fps_factor])
+                    if self.record_video:
+                        frames.append(frame)
+                    if self.display:
+                        if frame.shape[1] >= 1000:
+                            percent = 50
+                            width = int(frame.shape[1] * percent / 100)
+                            height = int(frame.shape[0] * percent / 100)
+                            new_shape = (width, height)
+                            frame = cv2.resize(frame, new_shape, interpolation=cv2.INTER_AREA)
+
+                        cv2.imshow('Face Detector', frame)
+                if cv2.waitKey(1) == 13 or time.time() - start_time >= stop_time:
+                    break
+        fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
         cv2.destroyAllWindows()
         plt.close()
+        if self.save_into_sheet:
+            self.api.write_table(filename, table)
         if self.record_video:
-            video = self.make_video(filename, frames, 25/fps_factor)
             if self.send_to_nvr:
+                fps = len(frames) / 1800
+                video = self.make_video(filename, frames, fps)
                 self.api.send_to_nvr(video)
+            else:
+                video = self.make_video(filename, frames, fps / fps_factor)
 
